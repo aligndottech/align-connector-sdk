@@ -1,0 +1,28 @@
+{
+  "name": "align-connector-sdk",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Open-source SDK for building Align connectors: read-only fetchers (connector-core) and full connector servers with webhooks + MCP (connector-server)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aligndottech/align-connector-sdk"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@typescript-eslint/eslint-plugin": "^8.60.0",
+    "@typescript-eslint/parser": "^8.60.0",
+    "eslint": "^9.39.2",
+    "typescript": "^6.0.3"
+  }
+}
