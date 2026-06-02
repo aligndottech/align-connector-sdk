@@ -8,6 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20', '22']
     steps:
       - uses: actions/checkout@v4
 
@@ -17,7 +21,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
@@ -31,5 +35,5 @@ jobs:
       - name: Lint
         run: pnpm -r run lint
 
-      - name: Test
-        run: pnpm -r run test
+      - name: Test + coverage (enforces thresholds)
+        run: pnpm -r run test:coverage
