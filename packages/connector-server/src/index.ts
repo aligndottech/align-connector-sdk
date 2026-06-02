@@ -35,5 +35,8 @@ export {
   type ConnectorOtelResult,
 } from './observability/index.js';
 
-// Testing
-export { TestHarness, type TestHarnessConfig } from './testing/TestHarness.js';
+// Testing utilities are intentionally NOT re-exported from this barrel: TestHarness
+// imports `supertest` (a devDependency), so eagerly exporting it here drags supertest
+// into every consumer's production import graph and crashes connectors that don't ship it.
+// Import them from the dedicated subpath instead:
+//   import { TestHarness } from '@aligndottech/connector-server/testing';
