@@ -22,6 +22,19 @@ export type {
   DecisionAuthor,
 } from './types/fetcher.js';
 
+// Canonical read-only fetchers (one implementation per provider, shared by the
+// CLI personal import and the paid discover scan).
+export {
+  FETCHERS,
+  GitHubFetcher,
+  GitLabFetcher,
+  GitFetcher,
+  buildCommitUrl,
+  formatCommitAsText,
+  type GitCommitSource,
+  type GitCommit,
+} from './fetchers/index.js';
+
 // Utils
 export {
   getContext,
