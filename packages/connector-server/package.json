@@ -1,6 +1,6 @@
 {
   "name": "@aligndottech/connector-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "license": "MIT",
   "type": "module",
   "description": "Align connector server: Express app factory, MCP handler, webhook guard, OTel setup, and test harness for building full Align connectors. Depends on @aligndottech/connector-core.",
