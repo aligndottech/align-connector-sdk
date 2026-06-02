@@ -2,6 +2,9 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
 import { FetcherAuthError } from './errors.js';
 
+// Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
+const CONFLUENCE_PAGE_MAX = 250;
+
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -11,6 +14,16 @@ interface ConfluencePageV2 {
   authorId?: string;
   body?: { storage?: { value?: string } };
   _links?: { webui?: string };
+}
+
+/** Pull the `cursor` query param out of a Confluence `_links.next` relative URL. */
+function cursorFromNext(next: string | undefined): string | undefined {
+  if (!next) return undefined;
+  try {
+    return new URL(next, 'https://placeholder.invalid').searchParams.get('cursor') ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Resolve a Confluence accountId to a display name (cached). Degrades to undefined
@@ -41,6 +54,7 @@ function makeConfluenceUserResolver(base: string, headers: Record<string, string
 /**
  * Read-only personal Confluence fetcher (API v2): pages the token can read.
  * OAuth (cloudId) or basic-auth (domain+email). Author = the page author.
+ * Paginates via the cursor in _links.next up to `limit`.
  */
 export class ConfluenceFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
@@ -61,44 +75,56 @@ export class ConfluenceFetcher implements ConnectorFetcher {
         };
 
     const limit = opts.limit ?? 50;
-    const url = `${base}/api/v2/pages?limit=${limit}&body-format=storage`;
-
-    const res = await fetch(url, { headers });
-    if (!res.ok) {
-      if (res.status === 401) throw new FetcherAuthError('Confluence');
-      if (res.status === 403) {
-        throw new Error(
-          'Confluence access denied (403): the token lacks Confluence scopes or this site has no Confluence. ' +
-            "Re-auth won't help - check the Atlassian app's Confluence API permissions (or skip Confluence).",
-        );
-      }
-      throw new Error(
-        `Confluence API failed (${res.status}). ${isOAuth ? 'Check your OAuth token.' : 'Check your email, token, and domain.'}`,
-      );
-    }
-    const data = (await res.json()) as { results: ConfluencePageV2[]; _links?: { base?: string } };
-
     const humanBase = isOAuth
       ? (siteBase ?? `https://api.atlassian.com/ex/confluence/${cloudId}`)
       : `https://${domain}`;
-    const linkBase = data._links?.base ?? `${humanBase}/wiki`;
     const resolveUser = makeConfluenceUserResolver(base, headers);
 
     const items: FetcherItem[] = [];
-    for (const page of data.results ?? []) {
-      const bodyHtml = page.body?.storage?.value ?? '';
-      const bodyText = stripHtml(bodyHtml).slice(0, 2000);
-      const webui = page._links?.webui ?? '';
-      const pageUrl = webui.startsWith('http') ? webui : `${linkBase}${webui}`;
-      const author = await resolveUser(page.authorId);
-      items.push({
-        source_url: pageUrl,
-        platform: 'confluence',
-        raw_text: [page.title, bodyText].filter(Boolean).join('\n\n'),
-        title: page.title,
-        ...(author ? { author } : {}),
-      });
+    let cursor: string | undefined;
+    let linkBase: string | undefined;
+
+    while (items.length < limit) {
+      const pageSize = Math.min(limit - items.length, CONFLUENCE_PAGE_MAX);
+      const url =
+        `${base}/api/v2/pages?limit=${pageSize}&body-format=storage` +
+        (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        if (res.status === 401) throw new FetcherAuthError('Confluence');
+        if (res.status === 403) {
+          throw new Error(
+            'Confluence access denied (403): the token lacks Confluence scopes or this site has no Confluence. ' +
+              "Re-auth won't help - check the Atlassian app's Confluence API permissions (or skip Confluence).",
+          );
+        }
+        throw new Error(
+          `Confluence API failed (${res.status}). ${isOAuth ? 'Check your OAuth token.' : 'Check your email, token, and domain.'}`,
+        );
+      }
+      const data = (await res.json()) as { results?: ConfluencePageV2[]; _links?: { base?: string; next?: string } };
+      linkBase = linkBase ?? data._links?.base ?? `${humanBase}/wiki`;
+
+      for (const page of data.results ?? []) {
+        if (items.length >= limit) break;
+        const bodyHtml = page.body?.storage?.value ?? '';
+        const bodyText = stripHtml(bodyHtml).slice(0, 2000);
+        const webui = page._links?.webui ?? '';
+        const pageUrl = webui.startsWith('http') ? webui : `${linkBase}${webui}`;
+        const author = await resolveUser(page.authorId);
+        items.push({
+          source_url: pageUrl,
+          platform: 'confluence',
+          raw_text: [page.title, bodyText].filter(Boolean).join('\n\n'),
+          title: page.title,
+          ...(author ? { author } : {}),
+        });
+      }
+
+      cursor = cursorFromNext(data._links?.next);
+      if (!cursor) break;
     }
+
     return items;
   }
 }

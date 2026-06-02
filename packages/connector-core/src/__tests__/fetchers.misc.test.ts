@@ -13,8 +13,11 @@ const text = (t: string) => ({ ok: true, status: 200, text: async () => t }) as 
 describe('LinearFetcher', () => {
   beforeEach(() => mockFetch.mockReset());
 
-  it('dedups assigned+created issues and maps author = creator', async () => {
-    mockFetch.mockResolvedValueOnce(
+  it('dedups assigned+created issues (paginated per connection) and maps author = creator', async () => {
+    // assignedIssues + createdIssues are fetched as separate paginated connections;
+    // each call reads its own field off this response, and pageInfo stops paging.
+    const noMore = { hasNextPage: false, endCursor: null };
+    mockFetch.mockResolvedValue(
       ok({
         data: {
           viewer: {
@@ -31,21 +34,25 @@ describe('LinearFetcher', () => {
                   comments: { nodes: [{ body: 'lean kafka', user: { name: 'Bob' } }] },
                 },
               ],
+              pageInfo: noMore,
             },
-            createdIssues: { nodes: [{ id: 'i1', title: 'Pick queue', description: '', url: 'https://linear.app/i1' }] },
+            createdIssues: {
+              nodes: [{ id: 'i1', title: 'Pick queue', description: '', url: 'https://linear.app/i1' }],
+              pageInfo: noMore,
+            },
           },
         },
       }),
     );
 
     const items = await new LinearFetcher().fetch({ token: 'tok' });
-    expect(items).toHaveLength(1); // deduped by id
+    expect(items).toHaveLength(1); // deduped by id across both connections
     expect(items[0]).toMatchObject({ platform: 'linear', title: 'Pick queue', author: { name: 'Ada', email: 'ada@x.io' } });
     expect(items[0].raw_text).toContain('Bob: lean kafka');
   });
 
   it('surfaces GraphQL errors', async () => {
-    mockFetch.mockResolvedValueOnce(ok({ errors: [{ message: 'bad token' }], data: null }));
+    mockFetch.mockResolvedValue(ok({ errors: [{ message: 'bad token' }], data: null }));
     await expect(new LinearFetcher().fetch({ token: 'bad' })).rejects.toThrow(/bad token/);
   });
 });

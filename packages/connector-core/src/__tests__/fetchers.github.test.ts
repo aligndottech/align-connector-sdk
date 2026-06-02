@@ -44,6 +44,21 @@ describe('GitHubFetcher', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.github.com/user');
   });
 
+  it('paginates the PR search across pages up to the limit', async () => {
+    const pr = (i: number) => ({ html_url: `u${i}`, title: `t${i}`, body: '', state: 'closed', repository_url: '' });
+    mockFetch
+      .mockResolvedValueOnce(json({ login: 'me' })) // /user
+      .mockResolvedValueOnce(json({ items: Array.from({ length: 100 }, (_, i) => pr(i)) })) // PR page 1 (full -> continue)
+      .mockResolvedValueOnce(json({ items: [pr(100), pr(101)] })) // PR page 2 (partial -> stop)
+      .mockResolvedValueOnce(json({ items: [] })); // commented-issues page 1 (empty)
+
+    const items = await new GitHubFetcher().fetch({ token: 't', limit: 150 });
+
+    expect(items).toHaveLength(102);
+    expect(mockFetch.mock.calls[1][0]).toContain('page=1');
+    expect(mockFetch.mock.calls[2][0]).toContain('page=2');
+  });
+
   it('throws a helpful error when auth fails', async () => {
     mockFetch.mockResolvedValueOnce(json(null, false, 401));
     await expect(new GitHubFetcher().fetch({ token: 'bad' })).rejects.toThrow(/GitHub auth failed \(401\)/);

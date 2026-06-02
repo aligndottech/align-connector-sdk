@@ -55,6 +55,18 @@ describe('JiraFetcher', () => {
     mockFetch.mockResolvedValueOnce(res(null, false, 403));
     await expect(new JiraFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toThrow(/access denied \(403\)/);
   });
+
+  it('paginates via nextPageToken up to the limit', async () => {
+    const issue = (key: string) => ({ key, fields: { summary: key, reporter: { displayName: 'A' } } });
+    mockFetch
+      .mockResolvedValueOnce(res({ issues: [issue('ENG-1')], nextPageToken: 'p2', isLast: false }))
+      .mockResolvedValueOnce(res({ issues: [issue('ENG-2')], isLast: true }));
+
+    const items = await new JiraFetcher().fetch({ token: 't', cloudId: 'c', siteBase: 'https://acme.atlassian.net', limit: 200 });
+
+    expect(items.map((i) => i.title)).toEqual(['[ENG-1] ENG-1', '[ENG-2] ENG-2']);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('ConfluenceFetcher', () => {
