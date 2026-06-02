@@ -34,3 +34,6 @@ export {
   type ConnectorOtelConfig,
   type ConnectorOtelResult,
 } from './observability/index.js';
+
+// Testing
+export { TestHarness, type TestHarnessConfig } from './testing/TestHarness.js';

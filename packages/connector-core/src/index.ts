@@ -40,6 +40,11 @@ export { CommandParser, CommandHelpText } from './parsers/CommandParser.js';
 
 // Services (light)
 export {
+  GatewayClient,
+  type GatewayClientConfig,
+  type JiraCredentials,
+} from './services/GatewayClient.js';
+export {
   consumeStreamWithProgressiveUpdates,
   type MessageUpdater,
   type StreamConsumerOptions,
@@ -60,3 +65,28 @@ export {
   getTierCapabilities,
   type TierCapabilities,
 } from './tiers/capabilities.js';
+
+// Decision-flow interfaces (contributor-implemented; engine stays proprietary)
+export {
+  NoOpDecisionFlowStateRepository,
+  type PlatformMessage,
+  type DecisionAlertFormatter,
+  type MessagePoster,
+  type DecisionFlowConversationState,
+  type DecisionFlowCommand,
+  type IDecisionFlowStateRepository,
+  type IMultiDecisionStateRepository,
+  type IConversationStateRepository,
+  type IDecisionFlowService,
+  type IMultiDecisionFlowService,
+  type IConversationFlowService,
+  type MultiDecisionFlowResult,
+  type ConnectorTier,
+  type ConnectorCapabilities,
+  type TranscriptAnalysisResult,
+  type DecisionCaptureResult,
+} from './types/flow.js';
+
+// Testing utilities
+export { MockGatewayClient } from './testing/MockGatewayClient.js';
+export { fixtures } from './testing/fixtures.js';
