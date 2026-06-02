@@ -10,13 +10,13 @@ export default defineConfig({
       reporter: ['text', 'html', 'lcov'],
       include: ['src/**/*.ts'],
       exclude: ['src/**/__tests__/**', 'src/**/*.test.ts'],
-      // Ratchet floor - raise as Phase 2 fetchers + CommandParser/TelemetryClient
-      // tests land. Set safely below current so CI gates without flaking.
+      // Ratchet floor - set safely below current (~85% lines) so CI gates
+      // without flaking. Raise further as Phase 2 fetchers land.
       thresholds: {
-        statements: 30,
-        branches: 18,
-        functions: 40,
-        lines: 30,
+        statements: 80,
+        branches: 72,
+        functions: 70,
+        lines: 80,
       },
     },
   },
