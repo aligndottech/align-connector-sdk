@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "bootstrap-sha": "6151be616adae8ebe75ac88ca6b5e27d486881b8",
+  "packages": {
+    "packages/connector-core": { "component": "connector-core" },
+    "packages/connector-server": { "component": "connector-server" }
+  },
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "align-connector-sdk",
+      "components": ["connector-core", "connector-server"]
+    }
+  ]
+}
