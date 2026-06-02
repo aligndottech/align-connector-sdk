@@ -1,0 +1,51 @@
+{
+  "name": "@aligndottech/connector-core",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "description": "Align connector core: the ConnectorFetcher contract, read-only fetchers, gateway client, and tier definitions. Lightweight (no server deps) - safe for the Align CLI.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aligndottech/align-connector-sdk",
+    "directory": "packages/connector-core"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsc -w",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "undici": "^6.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.8.0",
+    "@typescript-eslint/eslint-plugin": "^8.60.0",
+    "@typescript-eslint/parser": "^8.60.0",
+    "@vitest/coverage-v8": "^4.1.7",
+    "eslint": "^9.39.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
+  }
+}
