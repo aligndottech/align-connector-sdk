@@ -14,6 +14,9 @@ interface JiraIssue {
   };
 }
 
+// Jira Cloud's /search/jql caps maxResults at 100 per request and paginates via nextPageToken.
+const JIRA_PAGE_MAX = 100;
+
 function extractAdfText(adf: { content?: Array<{ content?: Array<{ text?: string }> }> } | null | undefined): string {
   if (!adf) return '';
   return (adf.content ?? [])
@@ -25,6 +28,7 @@ function extractAdfText(adf: { content?: Array<{ content?: Array<{ text?: string
 /**
  * Read-only personal Jira fetcher: issues assigned to or reported by the caller.
  * OAuth (cloudId) or basic-auth (domain+email). Author = the issue reporter.
+ * Paginates via nextPageToken up to `limit`.
  */
 export class JiraFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
@@ -45,27 +49,39 @@ export class JiraFetcher implements ConnectorFetcher {
     const limit = opts.limit ?? 100;
     const jql = 'assignee = currentUser() OR reporter = currentUser() ORDER BY updated DESC';
 
-    const res = await fetch(`${base}/rest/api/3/search/jql`, {
-      method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jql, maxResults: limit, fields: ['summary', 'description', 'status', 'key', 'reporter'] }),
-    });
-    if (!res.ok) {
-      if (res.status === 401) throw new FetcherAuthError('Jira');
-      if (res.status === 403) {
-        throw new Error(
-          "Jira access denied (403): the token lacks Jira scopes or access. Re-auth won't help - " +
-            "check the Atlassian app's Jira API permissions.",
-        );
+    const issues: JiraIssue[] = [];
+    let nextPageToken: string | undefined;
+    do {
+      const body: Record<string, unknown> = {
+        jql,
+        maxResults: Math.min(limit - issues.length, JIRA_PAGE_MAX),
+        fields: ['summary', 'description', 'status', 'key', 'reporter'],
+        ...(nextPageToken ? { nextPageToken } : {}),
+      };
+      const res = await fetch(`${base}/rest/api/3/search/jql`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        if (res.status === 401) throw new FetcherAuthError('Jira');
+        if (res.status === 403) {
+          throw new Error(
+            "Jira access denied (403): the token lacks Jira scopes or access. Re-auth won't help - " +
+              "check the Atlassian app's Jira API permissions.",
+          );
+        }
+        const text = await res.text();
+        throw new Error(`Jira API failed (${res.status}): ${text.slice(0, 200)}`);
       }
-      const text = await res.text();
-      throw new Error(`Jira API failed (${res.status}): ${text.slice(0, 200)}`);
-    }
-    const data = (await res.json()) as { issues: JiraIssue[] };
+      const data = (await res.json()) as { issues?: JiraIssue[]; nextPageToken?: string; isLast?: boolean };
+      issues.push(...(data.issues ?? []));
+      nextPageToken = data.isLast ? undefined : data.nextPageToken;
+    } while (nextPageToken && issues.length < limit);
 
     const browseBase = isOAuth ? (siteBase ?? `https://api.atlassian.com/ex/jira/${cloudId}`) : base;
 
-    return data.issues.map((issue) => {
+    return issues.slice(0, limit).map((issue) => {
       const desc = extractAdfText(issue.fields.description);
       return {
         source_url: `${browseBase}/browse/${issue.key}`,
