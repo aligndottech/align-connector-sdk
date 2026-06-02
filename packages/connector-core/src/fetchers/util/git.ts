@@ -13,15 +13,30 @@ export interface GitCommit {
   filesChanged?: string[];
 }
 
-/** Build a web URL for a commit from the origin remote URL (GitHub/GitLab/ssh/https). */
+/**
+ * Build a web URL for a commit from the origin remote URL (GitHub/GitLab,
+ * ssh/https/git protocols). Uses linear string ops (indexOf + anchored strips)
+ * rather than backtracking regexes to stay ReDoS-safe on untrusted input.
+ */
 export function buildCommitUrl(remoteUrl: string | null | undefined, sha: string): string {
   if (!remoteUrl) return `git://commit/${sha}`;
-  const sshGh = remoteUrl.match(/git@github\.com[:/](.+?)(?:\.git)?$/);
-  if (sshGh) return `https://github.com/${sshGh[1]}/commit/${sha}`;
-  const httpsGh = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
-  if (httpsGh) return `https://github.com/${httpsGh[1]}/commit/${sha}`;
-  const gl = remoteUrl.match(/gitlab\.com[:/](.+?)(?:\.git)?$/);
-  if (gl) return `https://gitlab.com/${gl[1]}/-/commit/${sha}`;
+
+  // Path = everything after "<host>", minus the leading separator and any
+  // trailing ".git". Both replaces are anchored (^ / $) so they run in linear time.
+  const pathAfter = (host: string): string | null => {
+    const idx = remoteUrl.indexOf(host);
+    if (idx < 0) return null;
+    const rest = remoteUrl
+      .slice(idx + host.length)
+      .replace(/^[:/]+/, '')
+      .replace(/\.git$/, '');
+    return rest || null;
+  };
+
+  const gh = pathAfter('github.com');
+  if (gh) return `https://github.com/${gh}/commit/${sha}`;
+  const gl = pathAfter('gitlab.com');
+  if (gl) return `https://gitlab.com/${gl}/-/commit/${sha}`;
   return `git://commit/${sha}`;
 }
 
