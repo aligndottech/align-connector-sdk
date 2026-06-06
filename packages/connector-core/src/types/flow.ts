@@ -235,3 +235,79 @@ export class NoOpDecisionFlowStateRepository implements IDecisionFlowStateReposi
     /* no-op */
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/* Ambient capture                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A normalized conversation message used for decision analysis. Connector authors
+ * map their platform's native messages into this shape.
+ */
+export interface ConversationItem {
+  author?: string;
+  content: string;
+  platform: string;
+  timestamp?: string;
+}
+
+/** The minimal decision shape a connector needs to render a capture confirmation. */
+export interface DetectedDecision {
+  title: string;
+  summary: string;
+  confidence: number;
+  made_by?: string[];
+}
+
+/**
+ * The kind of capture signal a connector emits:
+ * - 'reaction'   an explicit emoji/react gesture (consent is implicit in the act)
+ * - 'content'    a decision-shaped conversation detected in an opted-in resource
+ * - 'publish'    a deliberate publish/review act (e.g. a published page)
+ * - 'transition' a workflow state change the connector treats as a signal
+ */
+export type CaptureSignalKind = 'reaction' | 'content' | 'publish' | 'transition';
+
+export interface CaptureSignal {
+  kind: CaptureSignalKind;
+  /** Resource the signal belongs to: channel / repo / space / project id. */
+  resourceId: string;
+  /** Conversation the signal belongs to: thread / issue / page id. */
+  conversationId: string;
+  userId?: string;
+  items: ConversationItem[];
+  sourceUrl: string;
+}
+
+/**
+ * The universal, connector-agnostic capture contract. A connector implements this to
+ * feed its NATURAL capture signal(s) into Align's hosted ambient-capture engine.
+ *
+ * This is an INTERFACE only. The engine that decides whether a signal becomes a capture
+ * (entitlement, opt-in, decision-shape detection, analysis) is proprietary and lives in
+ * Align's hosted platform - a connector author implements the interface; the hosted engine
+ * calls it.
+ */
+export interface CaptureSignalAdapter {
+  /** Connector key, e.g. 'slack' | 'teams' | 'jira' | 'confluence' | 'github'. */
+  connectorKey: string;
+  /** Map a raw platform event into a CaptureSignal, or null if it is not one. */
+  detectSignal(event: unknown): Promise<CaptureSignal | null> | CaptureSignal | null;
+  /**
+   * Post the confirm gesture for a detected decision: an ephemeral message, adaptive
+   * card, or comment with a capture/undo affordance. The connector owns the
+   * platform-specific rendering.
+   */
+  postConfirm(signal: CaptureSignal, decisions: DetectedDecision[]): Promise<void>;
+}
+
+/** A no-op adapter: detects nothing, posts nothing. Useful as a default/test seam. */
+export class NoOpCaptureSignalAdapter implements CaptureSignalAdapter {
+  constructor(public readonly connectorKey: string) {}
+  detectSignal(): null {
+    return null;
+  }
+  async postConfirm(): Promise<void> {
+    /* no-op */
+  }
+}

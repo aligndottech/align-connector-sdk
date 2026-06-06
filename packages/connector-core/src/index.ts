@@ -106,6 +106,12 @@ export {
   type ConnectorCapabilities,
   type TranscriptAnalysisResult,
   type DecisionCaptureResult,
+  NoOpCaptureSignalAdapter,
+  type CaptureSignal,
+  type CaptureSignalAdapter,
+  type CaptureSignalKind,
+  type ConversationItem,
+  type DetectedDecision,
 } from './types/flow.js';
 
 // Testing utilities
