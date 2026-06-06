@@ -15,6 +15,28 @@ describe('@aligndottech/connector-core exports', () => {
     expect(core.NoOpDecisionFlowStateRepository).toBeDefined();
   });
 
+  it('exports the CaptureSignalAdapter contract + no-op', async () => {
+    const core = await import('../index.js');
+    expect(core.NoOpCaptureSignalAdapter).toBeDefined();
+    const adapter = new core.NoOpCaptureSignalAdapter('slack');
+    expect(adapter.connectorKey).toBe('slack');
+    expect(await adapter.detectSignal({ any: 'event' })).toBeNull();
+    // A custom adapter can normalize an event into a CaptureSignal.
+    const fake: import('../types/flow.js').CaptureSignalAdapter = {
+      connectorKey: 'teams',
+      detectSignal: () => ({
+        kind: 'reaction',
+        resourceId: 'r',
+        conversationId: 'c',
+        items: [{ content: 'we decided X', platform: 'teams' }],
+        sourceUrl: 'https://x',
+      }),
+      postConfirm: async () => {},
+    };
+    const signal = await fake.detectSignal({});
+    expect(signal?.kind).toBe('reaction');
+  });
+
   // IP boundary: the open core must NOT ship the decision-capture engines
   // or the decision-graph intelligence methods. Those stay closed.
   it('does NOT export the proprietary engines', async () => {
