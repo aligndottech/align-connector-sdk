@@ -1,6 +1,6 @@
 {
   "name": "@aligndottech/connector-core",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "license": "MIT",
   "type": "module",
   "description": "Align connector core: the ConnectorFetcher contract, read-only fetchers, gateway client, and tier definitions. Lightweight (no server deps) - safe for the Align CLI.",
