@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.3.0...connector-core-v0.4.0) (2026-07-08)
+
+
+### Features
+
+* **connector-core:** shared relationship contract - determinism constant + type-guard (ALI-219) ([#14](https://github.com/aligndottech/align-connector-sdk/issues/14)) ([9dccce4](https://github.com/aligndottech/align-connector-sdk/commit/9dccce43792a74c07f9b6d139dc34df8919b3460))
+
 ## [0.3.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.2.1...connector-core-v0.3.0) (2026-06-06)
 
 
