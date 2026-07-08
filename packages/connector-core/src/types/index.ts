@@ -94,19 +94,44 @@ export interface AmbiguityAnalysis {
 // ============================================================================
 
 /**
+ * Canonical relationship vocabulary for the decision graph.
+ *
+ * This is the SINGLE SOURCE OF TRUTH shared by the gateway engine and the CLI
+ * local path (ALI-219). The `DecisionRelationship` type is derived from it, so the
+ * type and the runtime list can never drift. Consumers that parse an LLM's chosen
+ * type (e.g. the CLI classifier) must validate against this with
+ * `isDecisionRelationship` and coerce/drop anything outside it - the graph's DB
+ * CHECK constraint only accepts these values.
+ */
+export const DECISION_RELATIONSHIPS = [
+  'supersedes',
+  'conflicts_with',
+  'contradicts',
+  'duplicates',
+  'clarifies',
+  'relates',
+  'refines',
+  'supports',
+  'questions',
+  'blocks',
+] as const;
+
+/**
  * Relationship types between decisions
  */
-export type DecisionRelationship =
-  | 'supersedes'
-  | 'conflicts_with'
-  | 'contradicts'
-  | 'duplicates'
-  | 'clarifies'
-  | 'relates'
-  | 'refines'
-  | 'supports'
-  | 'questions'
-  | 'blocks';
+export type DecisionRelationship = (typeof DECISION_RELATIONSHIPS)[number];
+
+/**
+ * Runtime type-guard: is `value` a canonical decision relationship?
+ * Lets consumers narrow an untrusted string (e.g. parsed LLM output) to
+ * `DecisionRelationship` and reject non-canonical types before they reach the graph.
+ */
+export function isDecisionRelationship(value: unknown): value is DecisionRelationship {
+  return (
+    typeof value === 'string' &&
+    (DECISION_RELATIONSHIPS as readonly string[]).includes(value)
+  );
+}
 
 /**
  * A related decision with relationship metadata

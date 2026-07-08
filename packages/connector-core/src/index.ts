@@ -13,6 +13,9 @@
 // Shared types
 export * from './types/index.js';
 
+// Shared contract constants (determinism rule)
+export { DETERMINISTIC_TEMPERATURE } from './constants.js';
+
 // The connector read contract
 export type {
   ConnectorFetcher,
