@@ -171,8 +171,31 @@ describe('GitHubFetcher', () => {
         },
       });
       const items = await new GitHubFetcher().fetch({ token: 't', limit: 10 });
-      expect(items).toHaveLength(10);
-      expect(items.filter((i) => i.title.startsWith('issue')).length).toBeGreaterThan(0);
+      // exact split, not just "some issue survived" - proves neither list can
+      // crowd the other out, not merely that crowding isn't total
+      expect(items.filter((i) => i.title.startsWith('pr')).length).toBe(5);
+      expect(items.filter((i) => i.title.startsWith('issue')).length).toBe(5);
+    });
+  });
+
+  describe('search failures (pre-existing behavior, unchanged by ALI-805)', () => {
+    it('returns whatever a search collected before a later page failed, rather than erroring the whole fetch', async () => {
+      // searchAll's `if (!res.ok) break` predates this PR and is untouched by
+      // it - locking in the existing behavior here, not proposing a change.
+      // Worth a test now because this PR triples the search calls (2 -> 3),
+      // so a transient failure on any one of them is 1.5x as likely to hit.
+      mockFetch.mockImplementation(async (input: unknown) => {
+        if (input === undefined) return json({});
+        const url = String(input);
+        if (url === 'https://api.github.com/user') return json({ login: 'me' });
+        if (url.includes('type:pr') && url.includes('involves:')) {
+          return json(null, false, 500); // this search fails outright
+        }
+        return json({ items: [] });
+      });
+
+      const items = await new GitHubFetcher().fetch({ token: 't', limit: 10 });
+      expect(items).toEqual([]); // no throw, no crash - degrades to an empty category
     });
   });
 
@@ -272,7 +295,37 @@ describe('GitHubFetcher', () => {
       await new GitHubFetcher().fetch({ token: 't', limit: 40 });
 
       expect(peak).toBeGreaterThan(1); // positive control: it really does run concurrently
-      expect(peak).toBeLessThanOrEqual(8);
+      expect(peak).toBe(5); // pins PARALLEL_DISCUSSION_FETCHES exactly, not just "under some slack"
+    });
+
+    it('bounds TOTAL concurrent discussion requests, not just items - GitHub asks for serial, not concurrent, requests per item', async () => {
+      // Regression guard: a PR item fires 3 discussion requests (issue
+      // comments, reviews, review comments). If those 3 run via Promise.all
+      // WITHIN each item, 5 concurrent items x 3 requests each can spike to
+      // 15 requests in flight - well past what GitHub's own best-practices
+      // doc asks for ("make requests serially instead of concurrently").
+      // This counts every discussion-endpoint call, not just one per item.
+      let inFlight = 0;
+      let peak = 0;
+      install({
+        search: {
+          'involves:me+type:pr': Array.from({ length: 40 }, (_, i) =>
+            row({ html_url: `p/${i}`, number: i, title: `pr${i}` }),
+          ),
+        },
+        onCall: async (url) => {
+          const isDiscussion = /issues\/\d+\/comments|pulls\/\d+\/(reviews|comments)/.test(url);
+          if (!isDiscussion) return;
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          await new Promise((r) => setTimeout(r, 0));
+          inFlight--;
+        },
+      });
+      await new GitHubFetcher().fetch({ token: 't', limit: 40 });
+
+      expect(peak).toBeGreaterThan(1); // positive control
+      expect(peak).toBeLessThanOrEqual(5);
     });
   });
 

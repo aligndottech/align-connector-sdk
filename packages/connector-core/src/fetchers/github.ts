@@ -84,7 +84,7 @@ async function mapWithConcurrency<T, R>(
       results[i] = await fn(items[i]!);
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, items.length)) }, () => worker()));
   return results;
 }
 
@@ -137,12 +137,14 @@ async function buildPrItem(pr: GitHubSearchItem, headers: Record<string, string>
   let rawText = `${pr.title}\n\n${pr.body ?? ''}\n\nStatus: ${status}\nRepo: ${repo}`.trim();
 
   if (repo && pr.number != null) {
-    const [comments, reviews, reviewComments] = await Promise.all([
-      fetchSection(`https://api.github.com/repos/${repo}/issues/${pr.number}/comments?per_page=20`, headers, 'Comments', false),
-      fetchSection(`https://api.github.com/repos/${repo}/pulls/${pr.number}/reviews?per_page=20`, headers, 'Code Reviews', true),
-      fetchSection(`https://api.github.com/repos/${repo}/pulls/${pr.number}/comments?per_page=20`, headers, 'Review Comments', false),
-    ]);
-    rawText += comments + reviews + reviewComments;
+    // Sequential, not Promise.all: GitHub's own best-practices guidance is
+    // to make requests serially rather than concurrently to avoid secondary
+    // rate limiting. PARALLEL_DISCUSSION_FETCHES already bounds how many
+    // ITEMS run at once - firing 3 more requests concurrently per item would
+    // undo that bound (5 items x 3 requests = 15 requests in flight).
+    rawText += await fetchSection(`https://api.github.com/repos/${repo}/issues/${pr.number}/comments?per_page=20`, headers, 'Comments', false);
+    rawText += await fetchSection(`https://api.github.com/repos/${repo}/pulls/${pr.number}/reviews?per_page=20`, headers, 'Code Reviews', true);
+    rawText += await fetchSection(`https://api.github.com/repos/${repo}/pulls/${pr.number}/comments?per_page=20`, headers, 'Review Comments', false);
   }
 
   return {
