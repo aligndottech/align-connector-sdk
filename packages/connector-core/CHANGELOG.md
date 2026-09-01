@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.4.0...connector-core-v0.5.0) (2026-09-01)
+
+
+### Features
+
+* **connector-core:** widen GitHub personal import and fetch discussion (ALI-805) ([#16](https://github.com/aligndottech/align-connector-sdk/issues/16)) ([16d3845](https://github.com/aligndottech/align-connector-sdk/commit/16d38454e6178082a94a11ba70b3746bce574878))
+
 ## [0.4.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.3.0...connector-core-v0.4.0) (2026-07-08)
 
 
