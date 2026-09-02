@@ -63,7 +63,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Unit tests for the guard (its negative control is the #26 message)
-        run: node --test scripts/__tests__/
+        # A file glob, not a directory: Node 22 resolves a bare directory as a module
+        # and fails before any test runs. Node 24 accepts directories, which is how
+        # this passed locally and failed in CI on its first run.
+        run: node --test scripts/__tests__/*.test.mjs
 
       - name: The squash commit release-please will see must parse
         env:
