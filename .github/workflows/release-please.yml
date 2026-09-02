@@ -37,44 +37,18 @@ jobs:
   # When a Release PR is merged, release-please cuts the GitHub releases and this
   # job publishes the released packages to npm (provenance-signed, public).
   #
-  # Auth is npm Trusted Publishing (OIDC) - id-token: write lets the runner mint
-  # a short-lived GitHub OIDC token, which pnpm exchanges for a publish token at
-  # npm's registry. No NPM_TOKEN secret: it went dead silently once before (a
-  # reused, unrelated-repo token expired with no signal until the next release),
-  # and OIDC removes that whole failure class rather than trading one expiry
-  # date for another. Requires a Trusted Publisher configured on npmjs.com for
-  # EACH package (connector-core, connector-server), pointing at this exact repo
-  # + workflow filename - npm checks that combination, not just id-token: write.
-  #
-  # actions/setup-node@v4 exports a DUMMY NODE_AUTH_TOKEN (literally the string
-  # XXXXX-XXXXX-XXXXX-XXXXX) whenever no real one is provided - removed only in
-  # setup-node v7 (actions/setup-node#1558). Confirmed by matching our masked
-  # log output to that exact placeholder, and by actions/setup-node#1440, where
-  # another OIDC adopter hit the identical symptom and had to force it empty.
-  # It "didn't break OIDC" per the removal PR's own description, but it did
-  # here - the dummy value overrides pnpm's static-token fallback path instead
-  # of leaving it empty, so publish never gets to try OIDC cleanly. Force it
-  # empty explicitly rather than bumping setup-node three majors under time
-  # pressure; that bump is a reasonable follow-up, not an urgent one.
-  #
-  # Fixing that got us to a DIFFERENT error, ENEEDAUTH - no auth attempted at
-  # all, not even OIDC. Root cause: pnpm's OIDC exchange for `publish` was
-  # added by pnpm/action-setup#10591 ("feat!: replace npm publish with
-  # libnpmpublish"), merged 2026-02-12 - over a month after our pinned
-  # pnpm@10.28.0 (released 2026-01-09). Confirmed empirically too: no pnpm
-  # 10.x changelog anywhere mentions libnpmpublish/OIDC-publish, and a local
-  # pnpm@10.28.0 run makes zero OIDC attempt before failing. The capability
-  # requires pnpm 11+, which in turn requires Node 22+ (pnpm 11's own release
-  # notes). Bumped both, scoped to this job only - `ci.yaml`'s test matrix
-  # still needs Node 20, so its own pnpm pin stays untouched.
-  #
-  # pnpm's own version-management (separate from corepack) auto-downgrades
-  # a mismatched invocation back to whatever package.json's "packageManager"
-  # says - verified locally: running the 11.25.0 binary directly still
-  # printed "using pnpm v10.28.0" and silently no-opped the whole point of
-  # this bump. --pm-on-fail=ignore on the install step is required to stop
-  # that; packageManager stays at 10.28.0 deliberately; see above, ci.yaml
-  # needs that value unchanged for its own job.
+  # This ran on npm Trusted Publishing (OIDC) briefly (PRs #18-#24). Every
+  # precondition pnpm's own OIDC exchange checks for was confirmed correct -
+  # GITHUB_ACTIONS, both ACTIONS_ID_TOKEN_REQUEST_* vars, even a manually
+  # fetched token forwarded via NPM_ID_TOKEN (GitHub's own minting endpoint
+  # returned a real 200) - and it still failed with ENEEDAUTH every time,
+  # with zero OIDC-related log output to diagnose further. Root cause was
+  # never pinned down after tracing pnpm's actual source through the whole
+  # `-r publish` call chain. Reverted to the plain NODE_AUTH_TOKEN secret
+  # this job used for 15+ prior successful releases, to stop a real release
+  # sitting blocked on an unresolved pnpm-internal mystery. OIDC is a
+  # reasonable thing to revisit later with more room to investigate; the PR
+  # history above has the full trail if anyone picks it back up.
   publish:
     needs: release-please
     # workflow_dispatch is a manual retry escape hatch (e.g. the publish step
@@ -92,70 +66,20 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          # Not the repo-wide pin (root package.json "packageManager",
-          # ci.yaml) - OIDC publish needs pnpm 11+, scoped to this job only.
-          # See the comment above the job.
-          version: 11.25.0
-          # action-setup HARD-FAILS if `version:` disagrees with whatever
-          # "packageManager" it finds (root package.json says 10.28.0) -
-          # verified from its own source (pnpm/action-setup, readTargetVersion
-          # in src/install-pnpm/run.ts). Point it at a package.json that has
-          # no "packageManager" field at all (neither workspace package sets
-          # one) so there is nothing to disagree with, rather than touching
-          # the root field ci.yaml still needs at 10.28.0.
-          package_json_file: packages/connector-core/package.json
+          version: 10.28.0
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22' # pnpm 11 requires Node 22+
+          node-version: '20'
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
-      # --pm-on-fail=ignore: without it pnpm silently re-execs as whatever
-      # package.json's "packageManager" says (10.28.0) and this whole bump
-      # is a no-op. See the comment above the job.
-      - run: pnpm --pm-on-fail=ignore install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
 
       - name: Build
         run: pnpm -r run build
 
-      # pnpm's own OIDC auto-detection (ci-info's GITHUB_ACTIONS check, see
-      # pnpm11/releasing/commands/src/publish/oidc/idToken.ts) silently skips
-      # with zero log output even though GITHUB_ACTIONS, ACTIONS_ID_TOKEN_
-      # REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN are all confirmed
-      # present and correct (checked directly in a prior dispatch - see
-      # PR #23 history). Root cause inside pnpm's own OIDC exchange chain not
-      # fully pinned down. Sidestep it rather than keep guessing: fetch the
-      # token ourselves via GitHub's documented request-token endpoint and
-      # forward it through NPM_ID_TOKEN, which pnpm's own source treats as
-      # the first-priority, CI-agnostic override - "any CI provider... can
-      # forward its token here and trusted publishing will work". Audience
-      # format (`npm:<registry-hostname>`) matches what pnpm's own code
-      # constructs internally.
-      - name: Fetch npm OIDC token via GitHub's request-token endpoint
-        id: npm-oidc
-        run: |
-          REQUEST_URL=$(node -e "
-            const u = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
-            u.searchParams.append('audience', 'npm:registry.npmjs.org');
-            console.log(u.href);
-          ")
-          RESPONSE=$(curl -s -w '\n%{http_code}' \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$REQUEST_URL")
-          STATUS=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
-          echo "GitHub OIDC token-request HTTP status: $STATUS"
-          TOKEN=$(echo "$BODY" | jq -r '.value // empty')
-          if [ -z "$TOKEN" ]; then
-            echo "FATAL: GitHub returned no usable OIDC token value (status $STATUS)" >&2
-            exit 1
-          fi
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-
       - name: Publish (connector-core before connector-server; topo-ordered)
         run: pnpm -r publish --access public --no-git-checks --provenance
         env:
-          NODE_AUTH_TOKEN: ''
-          NPM_ID_TOKEN: ${{ steps.npm-oidc.outputs.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
