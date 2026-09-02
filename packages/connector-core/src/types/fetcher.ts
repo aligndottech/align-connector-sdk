@@ -28,6 +28,12 @@ export interface FetcherItem {
   title?: string;
   /** Who to talk to about this item (decision owner / author), when resolvable. */
   author?: DecisionAuthor;
+  /**
+   * When the SOURCE says this was created, ISO-8601 Z. The source's own date,
+   * never the fetch time: absent means the platform did not say, and a
+   * consumer that wants "now" must write it itself where it can be seen.
+   */
+  created_at?: string;
 }
 
 /**

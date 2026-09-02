@@ -1,5 +1,6 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 async function slackGet(
   endpoint: string,
@@ -253,11 +254,14 @@ export class SlackFetcher implements ConnectorFetcher {
             // thread is often the CI output being discussed.
             const text = allMsgs.map((m) => m.text ?? '').join('\n');
             const author = await resolveUser(firstHuman.user);
+            // The root's ts: epoch seconds with microseconds, so the thread is dated by when it started.
+            const createdAt = toIsoOrUndefined(Number(thread.ts) * 1000);
             items.push({
               source_url: `https://slack.com/archives/${channel.id}/p${thread.ts.replace('.', '')}`,
               platform: 'slack',
               raw_text: `[#${channel.name}] Thread:\n${text}`,
               title: (firstHuman.text ?? `Thread in #${channel.name}`).slice(0, 80),
+              ...(createdAt ? { created_at: createdAt } : {}),
               ...(author ? { author } : {}),
             });
           } catch {

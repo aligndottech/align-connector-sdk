@@ -1,5 +1,6 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -19,6 +20,7 @@ interface TeamsMessageBody {
 }
 interface TeamsMessage {
   id: string;
+  createdDateTime?: string;
   subject?: string;
   webUrl?: string;
   body?: TeamsMessageBody;
@@ -85,11 +87,13 @@ export class TeamsFetcher implements ConnectorFetcher {
               .join('\n');
 
             const fromName = msg.from?.user?.displayName;
+            const createdAt = toIsoOrUndefined(msg.createdDateTime);
             items.push({
               source_url: msg.webUrl ?? 'https://teams.microsoft.com',
               platform: 'teams',
               raw_text,
               title: (msg.subject ?? mainText).slice(0, 80) || `Message in ${team.displayName}`,
+              ...(createdAt ? { created_at: createdAt } : {}),
               ...(fromName ? { author: { name: fromName } } : {}),
             });
           }

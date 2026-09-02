@@ -1,5 +1,6 @@
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
 import { buildCommitUrl, formatCommitAsText, type GitCommit } from './util/git.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 export type { GitCommit } from './util/git.js';
 
@@ -25,11 +26,13 @@ export class GitFetcher implements ConnectorFetcher {
     const remoteUrl = await this.source.getRemoteUrl();
     return commits.map((c) => {
       const url = buildCommitUrl(remoteUrl, c.sha);
+      const createdAt = toIsoOrUndefined(c.date);
       return {
         source_url: url,
         platform: 'git',
         raw_text: formatCommitAsText(c, url),
         title: c.subject,
+        ...(createdAt ? { created_at: createdAt } : {}),
         ...(c.author ? { author: { name: c.author } } : {}),
       } satisfies FetcherItem;
     });

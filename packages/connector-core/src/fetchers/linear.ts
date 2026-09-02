@@ -1,11 +1,12 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 const LINEAR_GQL = 'https://api.linear.app/graphql';
 const LINEAR_PAGE_MAX = 100;
 
 const ISSUE_FIELDS = `
-  id title description url
+  id title description url createdAt
   state { name }
   team { name }
   creator { name email }
@@ -17,6 +18,7 @@ interface LinearIssueNode {
   title: string;
   description: string | null;
   url: string;
+  createdAt?: string;
   state?: { name: string };
   team?: { name: string };
   creator?: { name?: string; email?: string };
@@ -74,6 +76,7 @@ export class LinearFetcher implements ConnectorFetcher {
       if (items.length >= limit) break;
       if (seen.has(issue.id)) continue;
       seen.add(issue.id);
+      const createdAt = toIsoOrUndefined(issue.createdAt);
       const comments = (issue.comments?.nodes ?? [])
         .map((c) => `${c.user?.name ?? 'Unknown'}: ${c.body}`)
         .join('\n');
@@ -90,6 +93,7 @@ export class LinearFetcher implements ConnectorFetcher {
           .filter(Boolean)
           .join('\n\n'),
         title: issue.title,
+        ...(createdAt ? { created_at: createdAt } : {}),
         ...(issue.creator?.name
           ? { author: { name: issue.creator.name, ...(issue.creator.email ? { email: issue.creator.email } : {}) } }
           : {}),

@@ -1,11 +1,13 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 interface GitLabMergeRequest {
   web_url: string;
   title: string;
   description: string | null;
   state: string;
+  created_at?: string;
 }
 
 /**
@@ -34,11 +36,13 @@ export class GitLabFetcher implements ConnectorFetcher {
     if (mrRes.ok) {
       const mrs = (await mrRes.json()) as GitLabMergeRequest[];
       for (const mr of mrs) {
+        const createdAt = toIsoOrUndefined(mr.created_at);
         items.push({
           source_url: mr.web_url,
           platform: 'gitlab',
           raw_text: `${mr.title}\n\n${mr.description ?? ''}\n\nStatus: ${mr.state}`.trim(),
           title: mr.title,
+          ...(createdAt ? { created_at: createdAt } : {}),
         });
       }
     }

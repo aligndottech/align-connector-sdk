@@ -1,5 +1,6 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 interface ZoomRecordingFile {
   file_type: string;
@@ -76,6 +77,7 @@ export class ZoomFetcher implements ConnectorFetcher {
         if (!transcript) continue;
 
         const date = meeting.start_time.slice(0, 10);
+        const createdAt = toIsoOrUndefined(meeting.start_time);
         const host = meeting.host_email
           ? { name: meeting.host_email.split('@')[0], email: meeting.host_email }
           : undefined;
@@ -84,6 +86,7 @@ export class ZoomFetcher implements ConnectorFetcher {
           platform: 'zoom',
           raw_text: `[${meeting.topic} - ${date}]\n${transcript}`.slice(0, 4000),
           title: `${meeting.topic} (${date})`.slice(0, 80),
+          ...(createdAt ? { created_at: createdAt } : {}),
           ...(host ? { author: host } : {}),
         });
       } catch {

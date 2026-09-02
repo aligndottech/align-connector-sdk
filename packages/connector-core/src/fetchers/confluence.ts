@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
 import { FetcherAuthError } from './errors.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 // Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
 const CONFLUENCE_PAGE_MAX = 250;
@@ -12,6 +13,8 @@ function stripHtml(html: string): string {
 interface ConfluencePageV2 {
   title: string;
   authorId?: string;
+  /** The latest revision's date. The page's own createdAt is the first draft. */
+  version?: { createdAt?: string };
   body?: { storage?: { value?: string } };
   _links?: { webui?: string };
 }
@@ -112,11 +115,13 @@ export class ConfluenceFetcher implements ConnectorFetcher {
         const webui = page._links?.webui ?? '';
         const pageUrl = webui.startsWith('http') ? webui : `${linkBase}${webui}`;
         const author = await resolveUser(page.authorId);
+        const createdAt = toIsoOrUndefined(page.version?.createdAt);
         items.push({
           source_url: pageUrl,
           platform: 'confluence',
           raw_text: [page.title, bodyText].filter(Boolean).join('\n\n'),
           title: page.title,
+          ...(createdAt ? { created_at: createdAt } : {}),
           ...(author ? { author } : {}),
         });
       }

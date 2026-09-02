@@ -1,11 +1,14 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 interface GitHubSearchItem {
   html_url: string;
   title: string;
   body: string | null;
   state: string;
+  /** When it was opened. Uniform across PRs and issues, unlike merged_at. */
+  created_at?: string;
   number?: number;
   repository_url?: string;
   user?: { login: string; html_url: string };
@@ -147,11 +150,13 @@ async function buildPrItem(pr: GitHubSearchItem, headers: Record<string, string>
     rawText += await fetchSection(`https://api.github.com/repos/${repo}/pulls/${pr.number}/comments?per_page=20`, headers, 'Review Comments', false);
   }
 
+  const createdAt = toIsoOrUndefined(pr.created_at);
   return {
     source_url: pr.html_url,
     platform: 'github',
     raw_text: rawText,
     title: pr.title,
+    ...(createdAt ? { created_at: createdAt } : {}),
     ...(pr.user ? { author: { name: pr.user.login, handle: pr.user.login, url: pr.user.html_url } } : {}),
   };
 }
@@ -169,11 +174,13 @@ async function buildIssueItem(issue: GitHubSearchItem, headers: Record<string, s
     );
   }
 
+  const createdAt = toIsoOrUndefined(issue.created_at);
   return {
     source_url: issue.html_url,
     platform: 'github',
     raw_text: rawText,
     title: issue.title,
+    ...(createdAt ? { created_at: createdAt } : {}),
     ...(issue.user ? { author: { name: issue.user.login, handle: issue.user.login, url: issue.user.html_url } } : {}),
   };
 }

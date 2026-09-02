@@ -1,9 +1,11 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 interface NotionPage {
   id: string;
   url?: string;
+  created_time?: string;
   created_by?: { id?: string };
   properties?: {
     title?: { title?: Array<{ plain_text?: string }> };
@@ -82,6 +84,7 @@ export class NotionFetcher implements ConnectorFetcher {
       const title = extractPageTitle(page);
       const pageUrl = page.url ?? `https://notion.so/${page.id.replace(/-/g, '')}`;
       const author = await resolveUser(page.created_by?.id);
+      const createdAt = toIsoOrUndefined(page.created_time);
 
       let bodyText = '';
       try {
@@ -99,6 +102,7 @@ export class NotionFetcher implements ConnectorFetcher {
         platform: 'notion',
         raw_text: [title, bodyText].filter(Boolean).join('\n\n').slice(0, 3000),
         title,
+        ...(createdAt ? { created_at: createdAt } : {}),
         ...(author ? { author } : {}),
       });
     }
