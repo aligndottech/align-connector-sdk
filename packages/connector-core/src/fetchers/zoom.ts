@@ -111,9 +111,12 @@ export class ZoomFetcher implements ConnectorFetcher {
         ? `/meetings/${encodeMeetingUuid(uuid)}/recordings`
         : `/users/me/recordings?page_size=${pageSize}&from=${window!.from}&to=${window!.to}` +
           (pageToken ? `&next_page_token=${encodeURIComponent(pageToken)}` : '');
-      const data = await zoomGet<{ meetings?: ZoomMeeting[]; next_page_token?: string }>(path, opts.token);
+      const data = await zoomGet<{ meetings?: ZoomMeeting[]; next_page_token?: string } & Partial<ZoomMeeting>>(path, opts.token);
+      // The single-meeting endpoint answers with the meeting itself, recording_files at the
+      // top level and no meetings array. Reading meetings[] there returned nothing, always.
+      const meetings = data.meetings ?? (data.recording_files ? [data as ZoomMeeting] : []);
 
-      for (const meeting of data.meetings ?? []) {
+      for (const meeting of meetings) {
         if (items.length >= limit) break;
         if (seen.has(meeting.uuid)) continue;
         seen.add(meeting.uuid);
