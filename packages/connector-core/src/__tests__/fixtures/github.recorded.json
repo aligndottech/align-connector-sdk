@@ -1,0 +1,122 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message.",
+  "responses": {
+    "api.github.com/user": {
+      "login": "ada",
+      "html_url": "https://github.com/ada"
+    },
+    "search/issues?q=involves:ada+type:pr": {
+      "total_count": 1,
+      "incomplete_results": false,
+      "items": [
+        {
+          "html_url": "https://github.com/o/r/pull/7",
+          "number": 7,
+          "title": "Add retry to the SQS consumer",
+          "body": "Three attempts, then dead-letter.",
+          "state": "closed",
+          "created_at": "2026-02-02T10:00:00Z",
+          "updated_at": "2026-02-04T10:00:00Z",
+          "repository_url": "https://api.github.com/repos/o/r",
+          "user": {
+            "login": "ada",
+            "html_url": "https://github.com/ada"
+          },
+          "pull_request": {
+            "url": "https://api.github.com/repos/o/r/pulls/7",
+            "merged_at": "2026-02-04T10:00:00Z"
+          }
+        }
+      ]
+    },
+    "search/issues?q=reviewed-by:ada+type:pr": {
+      "total_count": 1,
+      "incomplete_results": false,
+      "items": [
+        {
+          "html_url": "https://github.com/o/r/pull/7",
+          "number": 7,
+          "title": "Add retry to the SQS consumer",
+          "body": "Three attempts, then dead-letter.",
+          "state": "closed",
+          "created_at": "2026-02-02T10:00:00Z",
+          "updated_at": "2026-02-04T10:00:00Z",
+          "repository_url": "https://api.github.com/repos/o/r",
+          "user": {
+            "login": "ada",
+            "html_url": "https://github.com/ada"
+          },
+          "pull_request": {
+            "url": "https://api.github.com/repos/o/r/pulls/7",
+            "merged_at": "2026-02-04T10:00:00Z"
+          }
+        }
+      ]
+    },
+    "search/issues?q=involves:ada+type:issue": {
+      "total_count": 1,
+      "incomplete_results": false,
+      "items": [
+        {
+          "html_url": "https://github.com/o/r/issues/9",
+          "number": 9,
+          "title": "Flaky nightly",
+          "body": "The nightly fails one run in five.",
+          "state": "open",
+          "created_at": "2026-02-05T10:00:00Z",
+          "updated_at": "2026-02-05T10:00:00Z",
+          "repository_url": "https://api.github.com/repos/o/r",
+          "user": {
+            "login": "ada",
+            "html_url": "https://github.com/ada"
+          }
+        }
+      ]
+    },
+    "/repos/o/r/issues/7/comments": [
+      {
+        "body": "LGTM, one nit on the retry",
+        "user": {
+          "login": "bob"
+        },
+        "created_at": "2026-02-03T10:00:00Z"
+      }
+    ],
+    "/repos/o/r/pulls/7/reviews": [
+      {
+        "body": "Approved, but keep the cap",
+        "state": "APPROVED",
+        "user": {
+          "login": "bob"
+        },
+        "submitted_at": "2026-02-03T11:00:00Z"
+      }
+    ],
+    "/repos/o/r/pulls/7/comments": [],
+    "/repos/o/r/issues/9/comments": []
+  },
+  "expected": [
+    {
+      "source_url": "https://github.com/o/r/pull/7",
+      "platform": "github",
+      "raw_text": "Add retry to the SQS consumer\n\nThree attempts, then dead-letter.\n\nStatus: merged\nRepo: o/r\n\n## Comments\n[bob] (2026-02-03T10:00:00Z):\nLGTM, one nit on the retry\n\n## Code Reviews\n[bob] (2026-02-03T11:00:00Z) [APPROVED]:\nApproved, but keep the cap",
+      "title": "Add retry to the SQS consumer",
+      "author": {
+        "name": "ada",
+        "handle": "ada",
+        "url": "https://github.com/ada"
+      }
+    },
+    {
+      "source_url": "https://github.com/o/r/issues/9",
+      "platform": "github",
+      "raw_text": "Flaky nightly\n\nThe nightly fails one run in five.\n\nStatus: open",
+      "title": "Flaky nightly",
+      "author": {
+        "name": "ada",
+        "handle": "ada",
+        "url": "https://github.com/ada"
+      }
+    }
+  ]
+}

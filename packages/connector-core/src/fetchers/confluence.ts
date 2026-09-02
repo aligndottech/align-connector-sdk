@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { FetcherAuthError } from './errors.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 // Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
 const CONFLUENCE_PAGE_MAX = 250;
@@ -12,6 +13,10 @@ function stripHtml(html: string): string {
 interface ConfluencePageV2 {
   title: string;
   authorId?: string;
+  /** The current version's date: the page as it now stands, which is also what
+   *  the hosted scan records as decided_at for Confluence. The page's own
+   *  top-level createdAt is the first draft. */
+  version?: { createdAt?: string };
   body?: { storage?: { value?: string } };
   _links?: { webui?: string };
 }
@@ -58,6 +63,10 @@ function makeConfluenceUserResolver(base: string, headers: Record<string, string
  */
 export class ConfluenceFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const cloudId = opts.cloudId as string | undefined;
     const siteBase = opts.siteBase as string | undefined;
     const email = opts.email as string | undefined;
@@ -81,6 +90,7 @@ export class ConfluenceFetcher implements ConnectorFetcher {
     const resolveUser = makeConfluenceUserResolver(base, headers);
 
     const items: FetcherItem[] = [];
+    let scanned = 0;
     let cursor: string | undefined;
     let linkBase: string | undefined;
 
@@ -107,16 +117,19 @@ export class ConfluenceFetcher implements ConnectorFetcher {
 
       for (const page of data.results ?? []) {
         if (items.length >= limit) break;
+        scanned += 1;
         const bodyHtml = page.body?.storage?.value ?? '';
         const bodyText = stripHtml(bodyHtml).slice(0, 2000);
         const webui = page._links?.webui ?? '';
         const pageUrl = webui.startsWith('http') ? webui : `${linkBase}${webui}`;
         const author = await resolveUser(page.authorId);
+        const createdAt = toIsoOrUndefined(page.version?.createdAt);
         items.push({
           source_url: pageUrl,
           platform: 'confluence',
           raw_text: [page.title, bodyText].filter(Boolean).join('\n\n'),
           title: page.title,
+          ...(createdAt ? { created_at: createdAt } : {}),
           ...(author ? { author } : {}),
         });
       }
@@ -125,6 +138,6 @@ export class ConfluenceFetcher implements ConnectorFetcher {
       if (!cursor) break;
     }
 
-    return items;
+    return { items, report: { platform: 'confluence', scanned, requested: limit, skips: [] } };
   }
 }

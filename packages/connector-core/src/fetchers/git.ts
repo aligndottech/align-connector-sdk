@@ -1,5 +1,6 @@
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { buildCommitUrl, formatCommitAsText, type GitCommit } from './util/git.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 export type { GitCommit } from './util/git.js';
 
@@ -20,18 +21,25 @@ export class GitFetcher implements ConnectorFetcher {
   constructor(private readonly source: GitCommitSource) {}
 
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const limit = opts.limit ?? 100;
     const commits = await this.source.getCommitHistory({ limit });
     const remoteUrl = await this.source.getRemoteUrl();
-    return commits.map((c) => {
+    const items = commits.map((c) => {
       const url = buildCommitUrl(remoteUrl, c.sha);
+      const createdAt = toIsoOrUndefined(c.date);
       return {
         source_url: url,
         platform: 'git',
         raw_text: formatCommitAsText(c, url),
         title: c.subject,
+        ...(createdAt ? { created_at: createdAt } : {}),
         ...(c.author ? { author: { name: c.author } } : {}),
       } satisfies FetcherItem;
     });
+    return { items, report: { platform: 'git', scanned: commits.length, requested: limit, skips: [] } };
   }
 }

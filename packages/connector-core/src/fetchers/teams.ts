@@ -1,5 +1,6 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -19,6 +20,7 @@ interface TeamsMessageBody {
 }
 interface TeamsMessage {
   id: string;
+  createdDateTime?: string;
   subject?: string;
   webUrl?: string;
   body?: TeamsMessageBody;
@@ -57,9 +59,14 @@ function extractText(body: TeamsMessageBody | undefined): string {
  */
 export class TeamsFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const limit = opts.limit ?? 50;
     const teams = await graphGet<{ value: TeamsTeam[] }>('/me/joinedTeams', opts.token);
     const items: FetcherItem[] = [];
+    let scanned = 0;
 
     for (const team of teams.value) {
       if (items.length >= limit) break;
@@ -73,6 +80,7 @@ export class TeamsFetcher implements ConnectorFetcher {
           );
           for (const msg of msgs.value) {
             if (items.length >= limit) break;
+            scanned += 1;
             const mainText = extractText(msg.body);
             const replyTexts = (msg.replies ?? []).map((r) => extractText(r.body)).filter(Boolean);
             const raw_text = [
@@ -85,11 +93,13 @@ export class TeamsFetcher implements ConnectorFetcher {
               .join('\n');
 
             const fromName = msg.from?.user?.displayName;
+            const createdAt = toIsoOrUndefined(msg.createdDateTime);
             items.push({
               source_url: msg.webUrl ?? 'https://teams.microsoft.com',
               platform: 'teams',
               raw_text,
               title: (msg.subject ?? mainText).slice(0, 80) || `Message in ${team.displayName}`,
+              ...(createdAt ? { created_at: createdAt } : {}),
               ...(fromName ? { author: { name: fromName } } : {}),
             });
           }
@@ -99,6 +109,6 @@ export class TeamsFetcher implements ConnectorFetcher {
       }
     }
 
-    return items;
+    return { items, report: { platform: 'teams', scanned, requested: limit, skips: [] } };
   }
 }

@@ -22,6 +22,9 @@ export type {
   ConnectorFetcherOptions,
   FetcherItem,
   FetcherPage,
+  FetchSkip,
+  FetchReport,
+  FetchResult,
   DecisionAuthor,
 } from './types/fetcher.js';
 

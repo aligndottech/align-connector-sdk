@@ -1,0 +1,129 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message.",
+  "responses": {
+    "api.linear.app/graphql & assignedIssues": {
+      "data": {
+        "viewer": {
+          "assignedIssues": {
+            "nodes": [
+              {
+                "id": "i1",
+                "createdAt": "2026-01-07T08:30:00.000Z",
+                "title": "Pick queue",
+                "description": "kafka vs sqs",
+                "url": "https://linear.app/acme/issue/ENG-1/pick-queue",
+                "state": {
+                  "name": "In Progress"
+                },
+                "team": {
+                  "name": "Infra"
+                },
+                "creator": {
+                  "name": "Ada",
+                  "email": "ada@x.io"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "body": "lean kafka",
+                      "user": {
+                        "name": "Bob"
+                      }
+                    }
+                  ]
+                }
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": null
+            }
+          }
+        }
+      }
+    },
+    "api.linear.app/graphql & createdIssues": {
+      "data": {
+        "viewer": {
+          "createdIssues": {
+            "nodes": [
+              {
+                "id": "i1",
+                "createdAt": "2026-01-07T08:30:00.000Z",
+                "title": "Pick queue",
+                "description": "kafka vs sqs",
+                "url": "https://linear.app/acme/issue/ENG-1/pick-queue",
+                "state": {
+                  "name": "In Progress"
+                },
+                "team": {
+                  "name": "Infra"
+                },
+                "creator": {
+                  "name": "Ada",
+                  "email": "ada@x.io"
+                },
+                "comments": {
+                  "nodes": [
+                    {
+                      "body": "lean kafka",
+                      "user": {
+                        "name": "Bob"
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "i2",
+                "createdAt": "2026-01-12T08:30:00.000Z",
+                "title": "Freeze the CLI surface until Oct 31",
+                "description": null,
+                "url": "https://linear.app/acme/issue/ENG-2/freeze-the-cli",
+                "state": {
+                  "name": "Todo"
+                },
+                "team": {
+                  "name": "Infra"
+                },
+                "creator": {
+                  "name": "Ada",
+                  "email": "ada@x.io"
+                },
+                "comments": {
+                  "nodes": []
+                }
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false,
+              "endCursor": null
+            }
+          }
+        }
+      }
+    }
+  },
+  "expected": [
+    {
+      "source_url": "https://linear.app/acme/issue/ENG-1/pick-queue",
+      "platform": "linear",
+      "raw_text": "Pick queue\n\nkafka vs sqs\n\nTeam: Infra\n\nStatus: In Progress\n\nComments:\nBob: lean kafka",
+      "title": "Pick queue",
+      "author": {
+        "name": "Ada",
+        "email": "ada@x.io"
+      }
+    },
+    {
+      "source_url": "https://linear.app/acme/issue/ENG-2/freeze-the-cli",
+      "platform": "linear",
+      "raw_text": "Freeze the CLI surface until Oct 31\n\nTeam: Infra\n\nStatus: Todo",
+      "title": "Freeze the CLI surface until Oct 31",
+      "author": {
+        "name": "Ada",
+        "email": "ada@x.io"
+      }
+    }
+  ]
+}

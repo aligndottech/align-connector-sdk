@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { FetcherAuthError } from './errors.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 interface JiraIssue {
   key: string;
@@ -10,6 +11,7 @@ interface JiraIssue {
       content?: Array<{ content?: Array<{ text?: string }> }>;
     } | null;
     status?: { name: string };
+    created?: string;
     reporter?: { displayName?: string; emailAddress?: string; accountId?: string };
   };
 }
@@ -32,6 +34,10 @@ function extractAdfText(adf: { content?: Array<{ content?: Array<{ text?: string
  */
 export class JiraFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const cloudId = opts.cloudId as string | undefined;
     const siteBase = opts.siteBase as string | undefined;
     const email = opts.email as string | undefined;
@@ -55,7 +61,8 @@ export class JiraFetcher implements ConnectorFetcher {
       const body: Record<string, unknown> = {
         jql,
         maxResults: Math.min(limit - issues.length, JIRA_PAGE_MAX),
-        fields: ['summary', 'description', 'status', 'key', 'reporter'],
+        // `created` must be asked for by name or the search API leaves it out.
+        fields: ['summary', 'description', 'status', 'key', 'reporter', 'created'],
         ...(nextPageToken ? { nextPageToken } : {}),
       };
       const res = await fetch(`${base}/rest/api/3/search/jql`, {
@@ -81,8 +88,9 @@ export class JiraFetcher implements ConnectorFetcher {
 
     const browseBase = isOAuth ? (siteBase ?? `https://api.atlassian.com/ex/jira/${cloudId}`) : base;
 
-    return issues.slice(0, limit).map((issue) => {
+    const items = issues.slice(0, limit).map((issue) => {
       const desc = extractAdfText(issue.fields.description);
+      const createdAt = toIsoOrUndefined(issue.fields.created);
       return {
         source_url: `${browseBase}/browse/${issue.key}`,
         platform: 'jira',
@@ -94,6 +102,7 @@ export class JiraFetcher implements ConnectorFetcher {
           .filter(Boolean)
           .join('\n\n'),
         title: `[${issue.key}] ${issue.fields.summary}`,
+        ...(createdAt ? { created_at: createdAt } : {}),
         ...(issue.fields.reporter?.displayName
           ? {
               author: {
@@ -104,5 +113,6 @@ export class JiraFetcher implements ConnectorFetcher {
           : {}),
       } satisfies FetcherItem;
     });
+    return { items, report: { platform: 'jira', scanned: issues.length, requested: limit, skips: [] } };
   }
 }

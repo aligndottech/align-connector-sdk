@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ConnectorFetcher, FetcherItem } from '../index.js';
+import type { ConnectorFetcher, FetcherItem, FetchResult } from '../index.js';
 
 describe('ConnectorFetcher contract', () => {
   it('a fetcher returns normalized items including an optional author', async () => {
@@ -28,5 +28,40 @@ describe('ConnectorFetcher contract', () => {
     const opts = { token: 't', limit: 50, cursor: 'abc', since: '2026-01-01T00:00:00Z' };
     expect(opts.cursor).toBe('abc');
     expect(opts.since).toBe('2026-01-01T00:00:00Z');
+  });
+});
+
+describe('ConnectorFetcher fetch report contract (ALI-828)', () => {
+  it('fetchWithReport returns the items plus what the read could not reach', async () => {
+    const fetcher: ConnectorFetcher = {
+      async fetch() {
+        return [];
+      },
+      async fetchWithReport(opts) {
+        return {
+          items: [],
+          report: {
+            platform: 'example',
+            scanned: 3,
+            requested: opts.limit,
+            skips: [{ kind: 'page_cap', count: 2, detail: 'pages not read (raise maxPages)' }],
+          },
+        };
+      },
+    };
+    const result: FetchResult = await fetcher.fetchWithReport!({ token: 'tok', limit: 10 });
+    expect(result.report).toEqual({
+      platform: 'example',
+      scanned: 3,
+      requested: 10,
+      skips: [{ kind: 'page_cap', count: 2, detail: 'pages not read (raise maxPages)' }],
+    });
+  });
+
+  it('a fetcher that only implements fetch still satisfies the contract', () => {
+    // Optional on purpose: every existing implementation, in this repo and in
+    // anyone else's, keeps compiling. The first case in this file is that fetcher.
+    const fetcher: ConnectorFetcher = { async fetch() { return []; } };
+    expect(fetcher.fetchWithReport).toBeUndefined();
   });
 });

@@ -1,11 +1,12 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
+import { toIsoOrUndefined } from './util/time.js';
 
 const LINEAR_GQL = 'https://api.linear.app/graphql';
 const LINEAR_PAGE_MAX = 100;
 
 const ISSUE_FIELDS = `
-  id title description url
+  id title description url createdAt
   state { name }
   team { name }
   creator { name email }
@@ -17,6 +18,7 @@ interface LinearIssueNode {
   title: string;
   description: string | null;
   url: string;
+  createdAt?: string;
   state?: { name: string };
   team?: { name: string };
   creator?: { name?: string; email?: string };
@@ -62,6 +64,10 @@ async function fetchConnection(token: string, field: LinearConnection, target: n
  */
 export class LinearFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const limit = opts.limit ?? 50;
     const [assigned, created] = await Promise.all([
       fetchConnection(opts.token, 'assignedIssues', limit),
@@ -70,10 +76,13 @@ export class LinearFetcher implements ConnectorFetcher {
 
     const seen = new Set<string>();
     const items: FetcherItem[] = [];
+    let scanned = 0;
     for (const issue of [...assigned, ...created]) {
       if (items.length >= limit) break;
       if (seen.has(issue.id)) continue;
       seen.add(issue.id);
+      scanned += 1;
+      const createdAt = toIsoOrUndefined(issue.createdAt);
       const comments = (issue.comments?.nodes ?? [])
         .map((c) => `${c.user?.name ?? 'Unknown'}: ${c.body}`)
         .join('\n');
@@ -90,12 +99,13 @@ export class LinearFetcher implements ConnectorFetcher {
           .filter(Boolean)
           .join('\n\n'),
         title: issue.title,
+        ...(createdAt ? { created_at: createdAt } : {}),
         ...(issue.creator?.name
           ? { author: { name: issue.creator.name, ...(issue.creator.email ? { email: issue.creator.email } : {}) } }
           : {}),
       });
     }
 
-    return items;
+    return { items, report: { platform: 'linear', scanned, requested: limit, skips: [] } };
   }
 }

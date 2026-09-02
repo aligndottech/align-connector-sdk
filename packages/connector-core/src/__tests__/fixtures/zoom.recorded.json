@@ -1,0 +1,64 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message.",
+  "responses": {
+    "/users/me/recordings": {
+      "from": "2026-01-01",
+      "to": "2026-01-31",
+      "page_count": 1,
+      "page_size": 30,
+      "total_records": 2,
+      "next_page_token": "",
+      "meetings": [
+        {
+          "uuid": "abc==",
+          "id": 111,
+          "topic": "Planning",
+          "start_time": "2026-01-15T10:00:00Z",
+          "host_email": "lead@x.io",
+          "recording_files": [
+            {
+              "id": "r1",
+              "file_type": "TRANSCRIPT",
+              "status": "completed",
+              "download_url": "https://zoom.us/rec/download/planning-vtt"
+            },
+            {
+              "id": "r2",
+              "file_type": "MP4",
+              "status": "completed",
+              "download_url": "https://zoom.us/rec/download/planning-mp4"
+            }
+          ]
+        },
+        {
+          "uuid": "def==",
+          "id": 222,
+          "topic": "Standup",
+          "start_time": "2026-01-16T09:00:00Z",
+          "host_email": "lead@x.io",
+          "recording_files": [
+            {
+              "id": "r3",
+              "file_type": "MP4",
+              "status": "completed",
+              "download_url": "https://zoom.us/rec/download/standup-mp4"
+            }
+          ]
+        }
+      ]
+    },
+    "planning-vtt": "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nLead: we will ship friday\n\n2\n00:00:04.000 --> 00:00:06.000\nAda: agreed, friday\n"
+  },
+  "expected": [
+    {
+      "source_url": "https://zoom.us/recording/abc%3D%3D",
+      "platform": "zoom",
+      "raw_text": "[Planning - 2026-01-15]\nLead: we will ship friday Ada: agreed, friday",
+      "title": "Planning (2026-01-15)",
+      "author": {
+        "name": "lead",
+        "email": "lead@x.io"
+      }
+    }
+  ]
+}

@@ -1,0 +1,351 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message. Cases: (1) a human-rooted thread with two human replies, (2) a tombstone root under Align-bot replies only, (3) a tombstone root with one human reply, (4) two messages with reply_count 0 and 1, (5) a second conversations.list page behind next_cursor. 3 and 5 sit here before the code can use them, deliberately.",
+  "responses": {
+    "auth.test": {
+      "ok": true,
+      "url": "https://acme.slack.com/",
+      "team": "acme",
+      "user": "ada",
+      "team_id": "T01",
+      "user_id": "U1"
+    },
+    "conversations.list & cursor=LIST2": {
+      "ok": true,
+      "channels": [
+        {
+          "id": "C3",
+          "name": "design",
+          "is_channel": true,
+          "is_archived": false
+        }
+      ],
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "conversations.list": {
+      "ok": true,
+      "channels": [
+        {
+          "id": "C1",
+          "name": "eng",
+          "is_channel": true,
+          "is_archived": false
+        },
+        {
+          "id": "C2",
+          "name": "ops",
+          "is_channel": true,
+          "is_archived": false
+        }
+      ],
+      "response_metadata": {
+        "next_cursor": "LIST2"
+      }
+    },
+    "conversations.history & channel=C1": {
+      "ok": true,
+      "messages": [
+        {
+          "type": "message",
+          "ts": "1712345678.000100",
+          "user": "U1",
+          "text": "Should we move the queue to SQS?",
+          "thread_ts": "1712345678.000100",
+          "reply_count": 2,
+          "reply_users_count": 2,
+          "latest_reply": "1712345900.000300"
+        },
+        {
+          "type": "message",
+          "subtype": "tombstone",
+          "ts": "1712400000.000200",
+          "user": "USLACKBOT",
+          "text": "This message was deleted.",
+          "thread_ts": "1712400000.000200",
+          "reply_count": 2,
+          "reply_users_count": 1,
+          "latest_reply": "1712400120.000202"
+        },
+        {
+          "type": "message",
+          "ts": "1712500000.000300",
+          "user": "U2",
+          "text": "lunch?"
+        },
+        {
+          "type": "message",
+          "ts": "1712600000.000400",
+          "user": "U1",
+          "text": "anyone seen the runbook?",
+          "thread_ts": "1712600000.000400",
+          "reply_count": 1,
+          "reply_users_count": 1,
+          "latest_reply": "1712600060.000401"
+        }
+      ],
+      "has_more": false,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "conversations.history & channel=C2": {
+      "ok": true,
+      "messages": [
+        {
+          "type": "message",
+          "subtype": "tombstone",
+          "ts": "1712700000.000500",
+          "user": "USLACKBOT",
+          "text": "This message was deleted.",
+          "thread_ts": "1712700000.000500",
+          "reply_count": 2,
+          "reply_users_count": 1,
+          "latest_reply": "1712700200.000502"
+        },
+        {
+          "type": "message",
+          "subtype": "channel_join",
+          "ts": "1712710000.000600",
+          "user": "U3",
+          "text": "<@U3> has joined the channel"
+        }
+      ],
+      "has_more": false,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "conversations.history & channel=C3": {
+      "ok": true,
+      "messages": [
+        {
+          "type": "message",
+          "ts": "1712800000.000700",
+          "user": "U2",
+          "text": "Design review: dark theme is the default from 2.0",
+          "thread_ts": "1712800000.000700",
+          "reply_count": 2,
+          "reply_users_count": 2,
+          "latest_reply": "1712800200.000702"
+        }
+      ],
+      "has_more": false,
+      "response_metadata": {
+        "next_cursor": ""
+      }
+    },
+    "conversations.replies & ts=1712345678.000100": {
+      "ok": true,
+      "messages": [
+        {
+          "type": "message",
+          "ts": "1712345678.000100",
+          "user": "U1",
+          "text": "Should we move the queue to SQS?",
+          "thread_ts": "1712345678.000100",
+          "reply_count": 2
+        },
+        {
+          "type": "message",
+          "ts": "1712345800.000200",
+          "user": "U2",
+          "text": "SQS. Kafka is overkill for our volume.",
+          "thread_ts": "1712345678.000100",
+          "parent_user_id": "U1"
+        },
+        {
+          "type": "message",
+          "ts": "1712345900.000300",
+          "user": "U1",
+          "text": "Agreed, SQS it is.",
+          "thread_ts": "1712345678.000100",
+          "parent_user_id": "U1"
+        }
+      ],
+      "has_more": false
+    },
+    "conversations.replies & ts=1712400000.000200": {
+      "ok": true,
+      "messages": [
+        {
+          "type": "message",
+          "subtype": "tombstone",
+          "ts": "1712400000.000200",
+          "user": "USLACKBOT",
+          "text": "This message was deleted.",
+          "thread_ts": "1712400000.000200",
+          "reply_count": 2
+        },
+        {
+          "type": "message",
+          "subtype": "bot_message",
+          "ts": "1712400060.000201",
+          "bot_id": "B0AL",
+          "app_id": "A0AL",
+          "username": "Align",
+          "text": "Conversation Analysis :white_check_mark: 1 decision created",
+          "thread_ts": "1712400000.000200"
+        },
+        {
+          "type": "message",
+          "ts": "1712400120.000202",
+          "bot_id": "B0AL",
+          "user": "U0AL",
+          "text": "Conflict detected: this contradicts \"Keep RabbitMQ\" (0.82)",
+          "thread_ts": "1712400000.000200"
+        }
+      ],
+      "has_more": false
+    },
+    "conversations.replies & ts=1712700000.000500": {
+      "ok": true,
+      "messages": [
+        {
+          "type": "message",
+          "subtype": "tombstone",
+          "ts": "1712700000.000500",
+          "user": "USLACKBOT",
+          "text": "This message was deleted.",
+          "thread_ts": "1712700000.000500",
+          "reply_count": 2
+        },
+        {
+          "type": "message",
+          "ts": "1712700100.000501",
+          "user": "U9",
+          "text": "We are going with Postgres for the ledger.",
+          "thread_ts": "1712700000.000500"
+        },
+        {
+          "type": "message",
+          "subtype": "bot_message",
+          "ts": "1712700200.000502",
+          "bot_id": "B0AL",
+          "app_id": "A0AL",
+          "username": "Align",
+          "text": "Conversation Analysis :white_check_mark: 1 decision created",
+          "thread_ts": "1712700000.000500"
+        }
+      ],
+      "has_more": false
+    },
+    "conversations.replies & ts=1712800000.000700": {
+      "ok": true,
+      "messages": [
+        {
+          "type": "message",
+          "ts": "1712800000.000700",
+          "user": "U2",
+          "text": "Design review: dark theme is the default from 2.0",
+          "thread_ts": "1712800000.000700",
+          "reply_count": 2
+        },
+        {
+          "type": "message",
+          "ts": "1712800100.000701",
+          "user": "U1",
+          "text": "Fine by me, as long as light stays one click away.",
+          "thread_ts": "1712800000.000700",
+          "parent_user_id": "U2"
+        },
+        {
+          "type": "message",
+          "ts": "1712800200.000702",
+          "user": "U2",
+          "text": "It does. Shipping it.",
+          "thread_ts": "1712800000.000700",
+          "parent_user_id": "U2"
+        }
+      ],
+      "has_more": false
+    },
+    "users.info & user=U1": {
+      "ok": true,
+      "user": {
+        "id": "U1",
+        "name": "ada",
+        "real_name": "Ada L",
+        "profile": {
+          "real_name": "Ada L",
+          "display_name": "ada",
+          "email": "ada@x.io"
+        }
+      }
+    },
+    "users.info & user=U2": {
+      "ok": true,
+      "user": {
+        "id": "U2",
+        "name": "bob",
+        "real_name": "Bob K",
+        "profile": {
+          "real_name": "Bob K",
+          "display_name": "bob",
+          "email": "bob@x.io"
+        }
+      }
+    },
+    "users.info & user=U9": {
+      "ok": true,
+      "user": {
+        "id": "U9",
+        "name": "grace",
+        "real_name": "Grace H",
+        "profile": {
+          "real_name": "Grace H",
+          "display_name": "grace",
+          "email": "grace@x.io"
+        }
+      }
+    },
+    "users.info & user=USLACKBOT": {
+      "ok": true,
+      "user": {
+        "id": "USLACKBOT",
+        "name": "slackbot",
+        "real_name": "Slackbot",
+        "is_bot": false,
+        "profile": {
+          "real_name": "Slackbot",
+          "display_name": "Slackbot"
+        }
+      }
+    }
+  },
+  "expected": [
+    {
+      "source_url": "https://slack.com/archives/C1/p1712345678000100",
+      "platform": "slack",
+      "raw_text": "[#eng] Thread:\nShould we move the queue to SQS?\nSQS. Kafka is overkill for our volume.\nAgreed, SQS it is.",
+      "title": "Should we move the queue to SQS?",
+      "author": {
+        "name": "Ada L",
+        "handle": "ada",
+        "email": "ada@x.io"
+      }
+    },
+    {
+      "source_url": "https://slack.com/archives/C2/p1712700000000500",
+      "platform": "slack",
+      "raw_text": "[#ops] Thread:\nThis message was deleted.\nWe are going with Postgres for the ledger.\nConversation Analysis :white_check_mark: 1 decision created",
+      "title": "We are going with Postgres for the ledger.",
+      "author": {
+        "name": "Grace H",
+        "handle": "grace",
+        "email": "grace@x.io"
+      }
+    },
+    {
+      "source_url": "https://slack.com/archives/C3/p1712800000000700",
+      "platform": "slack",
+      "raw_text": "[#design] Thread:\nDesign review: dark theme is the default from 2.0\nFine by me, as long as light stays one click away.\nIt does. Shipping it.",
+      "title": "Design review: dark theme is the default from 2.0",
+      "author": {
+        "name": "Bob K",
+        "handle": "bob",
+        "email": "bob@x.io"
+      }
+    }
+  ]
+}

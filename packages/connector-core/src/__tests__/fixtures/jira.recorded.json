@@ -1,0 +1,78 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message.",
+  "responses": {
+    "/rest/api/3/search/jql": {
+      "issues": [
+        {
+          "id": "10001",
+          "key": "ENG-1",
+          "fields": {
+            "summary": "Adopt Postgres",
+            "created": "2026-03-01T09:00:00.000+0000",
+            "status": {
+              "name": "Done"
+            },
+            "reporter": {
+              "accountId": "acc1",
+              "displayName": "Ada",
+              "emailAddress": "ada@x.io"
+            },
+            "description": {
+              "type": "doc",
+              "version": 1,
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "we will use postgres"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "10002",
+          "key": "ENG-2",
+          "fields": {
+            "summary": "Retire the cron",
+            "created": "2026-03-02T09:00:00.000+0000",
+            "status": {
+              "name": "In Progress"
+            },
+            "reporter": {
+              "accountId": "acc2",
+              "displayName": "Bob"
+            },
+            "description": null
+          }
+        }
+      ],
+      "isLast": true
+    }
+  },
+  "expected": [
+    {
+      "source_url": "https://acme.atlassian.net/browse/ENG-1",
+      "platform": "jira",
+      "raw_text": "[ENG-1] Adopt Postgres\n\nwe will use postgres\n\nStatus: Done",
+      "title": "[ENG-1] Adopt Postgres",
+      "author": {
+        "name": "Ada",
+        "email": "ada@x.io"
+      }
+    },
+    {
+      "source_url": "https://acme.atlassian.net/browse/ENG-2",
+      "platform": "jira",
+      "raw_text": "[ENG-2] Retire the cron\n\nStatus: In Progress",
+      "title": "[ENG-2] Retire the cron",
+      "author": {
+        "name": "Bob"
+      }
+    }
+  ]
+}
