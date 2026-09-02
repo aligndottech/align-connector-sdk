@@ -1,0 +1,54 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message.",
+  "responses": {
+    "/api/v4/user": {
+      "id": 42,
+      "username": "ada",
+      "name": "Ada L"
+    },
+    "/merge_requests?author_id=42": [
+      {
+        "id": 1,
+        "iid": 3,
+        "title": "Adopt Kafka",
+        "description": "queue",
+        "state": "merged",
+        "created_at": "2026-01-08T08:30:00.000Z",
+        "merged_at": "2026-01-09T10:00:00.000Z",
+        "web_url": "https://gitlab.com/g/p/-/merge_requests/3",
+        "author": {
+          "id": 42,
+          "username": "ada"
+        }
+      },
+      {
+        "id": 2,
+        "iid": 4,
+        "title": "Drop the nightly job",
+        "description": null,
+        "state": "merged",
+        "created_at": "2026-01-10T08:30:00.000Z",
+        "merged_at": "2026-01-11T10:00:00.000Z",
+        "web_url": "https://gitlab.com/g/p/-/merge_requests/4",
+        "author": {
+          "id": 42,
+          "username": "ada"
+        }
+      }
+    ]
+  },
+  "expected": [
+    {
+      "source_url": "https://gitlab.com/g/p/-/merge_requests/3",
+      "platform": "gitlab",
+      "raw_text": "Adopt Kafka\n\nqueue\n\nStatus: merged",
+      "title": "Adopt Kafka"
+    },
+    {
+      "source_url": "https://gitlab.com/g/p/-/merge_requests/4",
+      "platform": "gitlab",
+      "raw_text": "Drop the nightly job\n\n\n\nStatus: merged",
+      "title": "Drop the nightly job"
+    }
+  ]
+}

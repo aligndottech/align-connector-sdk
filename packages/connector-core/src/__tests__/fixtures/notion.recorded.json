@@ -1,0 +1,137 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message.",
+  "responses": {
+    "/v1/search": {
+      "object": "list",
+      "results": [
+        {
+          "object": "page",
+          "id": "abc-123",
+          "created_time": "2026-01-06T08:30:00.000Z",
+          "last_edited_time": "2026-01-20T08:30:00.000Z",
+          "created_by": {
+            "object": "user",
+            "id": "u1"
+          },
+          "url": "https://notion.so/Spec-abc123",
+          "properties": {
+            "title": {
+              "id": "title",
+              "type": "title",
+              "title": [
+                {
+                  "type": "text",
+                  "plain_text": "Spec"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "object": "page",
+          "id": "def-456",
+          "created_time": "2026-01-07T08:30:00.000Z",
+          "last_edited_time": "2026-01-07T08:30:00.000Z",
+          "created_by": {
+            "object": "user",
+            "id": "u1"
+          },
+          "url": "https://notion.so/Auth-def456",
+          "properties": {
+            "Name": {
+              "id": "title",
+              "type": "title",
+              "title": [
+                {
+                  "type": "text",
+                  "plain_text": "Auth approach"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "next_cursor": null,
+      "has_more": false
+    },
+    "/v1/users/u1": {
+      "object": "user",
+      "id": "u1",
+      "name": "Carol",
+      "type": "person",
+      "person": {
+        "email": "carol@x.io"
+      }
+    },
+    "/v1/blocks/abc-123/children": {
+      "object": "list",
+      "results": [
+        {
+          "object": "block",
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "plain_text": "decide on auth"
+              }
+            ]
+          }
+        }
+      ],
+      "has_more": false
+    },
+    "/v1/blocks/def-456/children": {
+      "object": "list",
+      "results": [
+        {
+          "object": "block",
+          "type": "heading_2",
+          "heading_2": {
+            "rich_text": [
+              {
+                "type": "text",
+                "plain_text": "Decision"
+              }
+            ]
+          }
+        },
+        {
+          "object": "block",
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "plain_text": "OIDC via the org IdP"
+              }
+            ]
+          }
+        }
+      ],
+      "has_more": false
+    }
+  },
+  "expected": [
+    {
+      "source_url": "https://notion.so/Spec-abc123",
+      "platform": "notion",
+      "raw_text": "Spec\n\ndecide on auth",
+      "title": "Spec",
+      "author": {
+        "name": "Carol",
+        "email": "carol@x.io"
+      }
+    },
+    {
+      "source_url": "https://notion.so/Auth-def456",
+      "platform": "notion",
+      "raw_text": "Auth approach\n\nDecision\nOIDC via the org IdP",
+      "title": "Auth approach",
+      "author": {
+        "name": "Carol",
+        "email": "carol@x.io"
+      }
+    }
+  ]
+}

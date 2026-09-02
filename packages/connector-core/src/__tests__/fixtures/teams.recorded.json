@@ -1,0 +1,77 @@
+{
+  "note": "Recorded 2026-09-02 against connector-core 0.5.0 (7b98691), before any ALI-828 fetcher change. The responses are hand-authored to the provider's documented API shape; the expected array was produced by running the UNCHANGED 0.5.0 fetcher over them (GOLDEN_RECORD=1) and is the byte-identical contract: a filter may REMOVE an entry, pagination may ADD one, and no kept entry's bytes may move. Regenerate only with a stated reason in the commit message.",
+  "responses": {
+    "/me/joinedTeams": {
+      "value": [
+        {
+          "id": "T1",
+          "displayName": "Platform"
+        }
+      ]
+    },
+    "/teams/T1/channels": {
+      "value": [
+        {
+          "id": "CH1",
+          "displayName": "General"
+        }
+      ]
+    },
+    "/teams/T1/channels/CH1/messages": {
+      "value": [
+        {
+          "id": "m1",
+          "createdDateTime": "2026-01-09T08:30:00.123Z",
+          "subject": "DB choice",
+          "webUrl": "https://teams.microsoft.com/l/message/CH1/m1",
+          "body": {
+            "contentType": "html",
+            "content": "<p>use postgres</p>"
+          },
+          "from": {
+            "user": {
+              "id": "u1",
+              "displayName": "Linus"
+            }
+          }
+        },
+        {
+          "id": "m2",
+          "createdDateTime": "2026-01-10T09:00:00Z",
+          "subject": null,
+          "webUrl": "https://teams.microsoft.com/l/message/CH1/m2",
+          "body": {
+            "contentType": "text",
+            "content": "standup moved to 10"
+          },
+          "from": {
+            "user": {
+              "id": "u2",
+              "displayName": "Grace"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "expected": [
+    {
+      "source_url": "https://teams.microsoft.com/l/message/CH1/m1",
+      "platform": "teams",
+      "raw_text": "[Platform > #General]\nSubject: DB choice\nuse postgres",
+      "title": "DB choice",
+      "author": {
+        "name": "Linus"
+      }
+    },
+    {
+      "source_url": "https://teams.microsoft.com/l/message/CH1/m2",
+      "platform": "teams",
+      "raw_text": "[Platform > #General]\nstandup moved to 10",
+      "title": "standup moved to 10",
+      "author": {
+        "name": "Grace"
+      }
+    }
+  ]
+}
