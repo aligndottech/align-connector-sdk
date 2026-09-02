@@ -37,3 +37,36 @@ jobs:
 
       - name: Test + coverage (enforces thresholds)
         run: pnpm -r run test:coverage
+
+  # release-please reads the SQUASH commit of a merged PR: the PR title (or the
+  # single commit's subject) plus every commit message on the branch. A line it
+  # cannot parse discards the whole commit from the release and the changelog,
+  # and nothing goes red. That stranded #26 (no 0.6.0 release PR was built). This
+  # job composes that message the way GitHub will and fails the PR first.
+  squash-message:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Unit tests for the guard (its negative control is the #26 message)
+        run: node --test scripts/__tests__/
+
+      - name: The squash commit release-please will see must parse
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.number }}
+        run: node scripts/check-squash-message.mjs origin/${{ github.base_ref }} ${{ github.event.pull_request.head.sha }}

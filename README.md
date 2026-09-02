@@ -72,6 +72,16 @@ The engine is **tool-agnostic** - it calls *your* formatter/poster through the i
 
 Develop and test entirely against the SDK's mocks (`MockGatewayClient`, `TestHarness`, `NoOpDecisionFlowStateRepository`) - you never need the engine source. You write the **adapter** (tool knowledge); Align provides the **brain** (decision intelligence). One contribution, both tiers.
 
+## Releasing
+
+release-please cuts releases from conventional commits on `main`. A PR squash-merges with the PR
+title (or the single commit's subject) as the subject and every commit message on the branch as
+the body, and release-please parses that whole message. A line it cannot parse drops the entire
+commit from the release and the changelog with nothing going red; #26 shipped that way and needed
+#27 to release it. CI's `squash-message` job composes the message GitHub will write and fails the
+PR while it can still be reworded. Plain prose in commit bodies parses; a line that opens with a
+backtick or a parenthesis does not.
+
 ## Develop
 
 ```bash
