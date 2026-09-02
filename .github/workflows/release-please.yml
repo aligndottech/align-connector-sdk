@@ -45,6 +45,17 @@ jobs:
   # date for another. Requires a Trusted Publisher configured on npmjs.com for
   # EACH package (connector-core, connector-server), pointing at this exact repo
   # + workflow filename - npm checks that combination, not just id-token: write.
+  #
+  # actions/setup-node@v4 exports a DUMMY NODE_AUTH_TOKEN (literally the string
+  # XXXXX-XXXXX-XXXXX-XXXXX) whenever no real one is provided - removed only in
+  # setup-node v7 (actions/setup-node#1558). Confirmed by matching our masked
+  # log output to that exact placeholder, and by actions/setup-node#1440, where
+  # another OIDC adopter hit the identical symptom and had to force it empty.
+  # It "didn't break OIDC" per the removal PR's own description, but it did
+  # here - the dummy value overrides pnpm's static-token fallback path instead
+  # of leaving it empty, so publish never gets to try OIDC cleanly. Force it
+  # empty explicitly rather than bumping setup-node three majors under time
+  # pressure; that bump is a reasonable follow-up, not an urgent one.
   publish:
     needs: release-please
     # workflow_dispatch is a manual retry escape hatch (e.g. the publish step
@@ -77,3 +88,5 @@ jobs:
 
       - name: Publish (connector-core before connector-server; topo-ordered)
         run: pnpm -r publish --access public --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ''
