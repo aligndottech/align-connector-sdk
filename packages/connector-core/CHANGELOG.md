@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.5.0...connector-core-v0.6.0) (2026-09-02)
+
+
+### Features
+
+* **fetchers:** fetch reports, Slack human-thread rule, pagination, source dates, Zoom uuid path (ALI-828) ([#27](https://github.com/aligndottech/align-connector-sdk/issues/27)) ([6edb8ca](https://github.com/aligndottech/align-connector-sdk/commit/6edb8cab0c32e49657cd233cede2a72b6056aad6))
+
 ## [0.5.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.4.0...connector-core-v0.5.0) (2026-09-01)
 
 
