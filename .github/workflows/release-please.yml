@@ -3,6 +3,12 @@ name: Release Please
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why this manual publish is needed (e.g. "retry after fixing npm auth")'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -41,7 +47,12 @@ jobs:
   # + workflow filename - npm checks that combination, not just id-token: write.
   publish:
     needs: release-please
-    if: needs.release-please.outputs.releases_created == 'true'
+    # workflow_dispatch is a manual retry escape hatch (e.g. the publish step
+    # failed on a dead auth secret and the release is already tagged, so
+    # there is nothing new for release-please to create - releases_created
+    # would report false on a fresh run). npm rejects re-publishing a
+    # version that already succeeded, so a redundant dispatch is harmless.
+    if: github.event_name == 'workflow_dispatch' || needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
