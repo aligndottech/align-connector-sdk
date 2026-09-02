@@ -30,6 +30,15 @@ jobs:
 
   # When a Release PR is merged, release-please cuts the GitHub releases and this
   # job publishes the released packages to npm (provenance-signed, public).
+  #
+  # Auth is npm Trusted Publishing (OIDC) - id-token: write lets the runner mint
+  # a short-lived GitHub OIDC token, which pnpm exchanges for a publish token at
+  # npm's registry. No NPM_TOKEN secret: it went dead silently once before (a
+  # reused, unrelated-repo token expired with no signal until the next release),
+  # and OIDC removes that whole failure class rather than trading one expiry
+  # date for another. Requires a Trusted Publisher configured on npmjs.com for
+  # EACH package (connector-core, connector-server), pointing at this exact repo
+  # + workflow filename - npm checks that combination, not just id-token: write.
   publish:
     needs: release-please
     if: needs.release-please.outputs.releases_created == 'true'
@@ -57,5 +66,3 @@ jobs:
 
       - name: Publish (connector-core before connector-server; topo-ordered)
         run: pnpm -r publish --access public --no-git-checks --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
