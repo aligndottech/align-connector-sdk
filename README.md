@@ -22,17 +22,32 @@ An adapter has two layers - implement what your tool supports:
 **1. Read (required)** - a `ConnectorFetcher` that pulls items from your tool's read API:
 
 ```ts
-import type { ConnectorFetcher, FetcherItem } from '@aligndottech/connector-core';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '@aligndottech/connector-core';
 
 export class MiroFetcher implements ConnectorFetcher {
-  async fetch({ token, limit }): Promise<FetcherItem[]> {
+  async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  // Optional, and the shape every built-in fetcher uses: the read lives here, and
+  // `fetch()` delegates so the two cannot drift. The report says what the read
+  // could NOT reach - a page cap, a time budget, an object that was not the kind
+  // you read, an error the provider returned - as counts a person can read.
+  async fetchWithReport({ token, limit = 50 }: ConnectorFetcherOptions): Promise<FetchResult> {
     // call your tool's read API, map results to FetcherItem[]
-    return [];
+    const items: FetcherItem[] = [];
+    return { items, report: { platform: 'miro', scanned: 0, requested: limit, skips: [] } };
   }
 }
 ```
 
-This single implementation serves both the **free CLI** (calls `fetch()` for personal imports) and the **paid discover scan** (calls your `fetch_historical` tool, backed by the same fetcher).
+A `FetcherItem` carries `source_url`, `platform`, `raw_text`, an optional `title` and `author`, and an optional
+`created_at` (ISO-8601 Z) taken from **the tool's own timestamp**. Leave `created_at` out when the tool did not say;
+never substitute the fetch time, because a plausible wrong date is indistinguishable from a measurement downstream.
+
+This single implementation serves both the **free CLI** (calls `fetch()` for personal imports, and `fetchWithReport()`
+when present, to print what each import fetched and skipped) and the **paid discover scan** (calls your `fetch_historical`
+tool, backed by the same fetcher).
 
 **2. Real-time (optional)** - to capture decisions live (a Slack/Teams-style bot), implement the platform interfaces and stand up a webhook server with the SDK's scaffolding:
 
