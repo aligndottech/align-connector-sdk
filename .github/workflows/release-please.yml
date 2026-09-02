@@ -92,10 +92,18 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          # Not the repo-wide pin (package.json "packageManager", ci.yaml) -
-          # OIDC publish needs pnpm 11+, scoped to this job only. See the
-          # comment above the job.
+          # Not the repo-wide pin (root package.json "packageManager",
+          # ci.yaml) - OIDC publish needs pnpm 11+, scoped to this job only.
+          # See the comment above the job.
           version: 11.25.0
+          # action-setup HARD-FAILS if `version:` disagrees with whatever
+          # "packageManager" it finds (root package.json says 10.28.0) -
+          # verified from its own source (pnpm/action-setup, readTargetVersion
+          # in src/install-pnpm/run.ts). Point it at a package.json that has
+          # no "packageManager" field at all (neither workspace package sets
+          # one) so there is nothing to disagree with, rather than touching
+          # the root field ci.yaml still needs at 10.28.0.
+          package_json_file: packages/connector-core/package.json
 
       - uses: actions/setup-node@v4
         with:
