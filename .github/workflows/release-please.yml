@@ -119,21 +119,43 @@ jobs:
       - name: Build
         run: pnpm -r run build
 
-      # THROWAWAY, remove once the OIDC mystery below is resolved. pnpm's
-      # publish silently skips OIDC with zero log output when ci-info's
-      # GITHUB_ACTIONS check is false (verified from pnpm's own source:
-      # pnpm11/releasing/commands/src/publish/oidc/idToken.ts) - every OTHER
-      # failure path prints "Skipped OIDC: ..." first, and our run printed
-      # nothing. This checks PRESENCE only, never the value - both are live
-      # bearer credentials for minting further tokens.
-      - name: OIDC diagnostic (throwaway)
-        continue-on-error: true
+      # pnpm's own OIDC auto-detection (ci-info's GITHUB_ACTIONS check, see
+      # pnpm11/releasing/commands/src/publish/oidc/idToken.ts) silently skips
+      # with zero log output even though GITHUB_ACTIONS, ACTIONS_ID_TOKEN_
+      # REQUEST_URL and ACTIONS_ID_TOKEN_REQUEST_TOKEN are all confirmed
+      # present and correct (checked directly in a prior dispatch - see
+      # PR #23 history). Root cause inside pnpm's own OIDC exchange chain not
+      # fully pinned down. Sidestep it rather than keep guessing: fetch the
+      # token ourselves via GitHub's documented request-token endpoint and
+      # forward it through NPM_ID_TOKEN, which pnpm's own source treats as
+      # the first-priority, CI-agnostic override - "any CI provider... can
+      # forward its token here and trusted publishing will work". Audience
+      # format (`npm:<registry-hostname>`) matches what pnpm's own code
+      # constructs internally.
+      - name: Fetch npm OIDC token via GitHub's request-token endpoint
+        id: npm-oidc
         run: |
-          echo "GITHUB_ACTIONS=$GITHUB_ACTIONS"
-          echo "ACTIONS_ID_TOKEN_REQUEST_URL is set: $([ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && echo yes || echo no)"
-          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN is set: $([ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ] && echo yes || echo no)"
+          REQUEST_URL=$(node -e "
+            const u = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+            u.searchParams.append('audience', 'npm:registry.npmjs.org');
+            console.log(u.href);
+          ")
+          RESPONSE=$(curl -s -w '\n%{http_code}' \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$REQUEST_URL")
+          STATUS=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "GitHub OIDC token-request HTTP status: $STATUS"
+          TOKEN=$(echo "$BODY" | jq -r '.value // empty')
+          if [ -z "$TOKEN" ]; then
+            echo "FATAL: GitHub returned no usable OIDC token value (status $STATUS)" >&2
+            exit 1
+          fi
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Publish (connector-core before connector-server; topo-ordered)
         run: pnpm -r publish --access public --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ''
+          NPM_ID_TOKEN: ${{ steps.npm-oidc.outputs.token }}
