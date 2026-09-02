@@ -3,7 +3,7 @@
  * and the fetch report (phase 4). The two existing Slack cases stay in
  * fetchers.chat.test.ts.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import { SlackFetcher } from '../fetchers/slack.js';
 
@@ -215,5 +215,237 @@ describe('SlackFetcher keeps a thread only when a human said something', () => {
     const items = await fetchAll();
     expect(items).toHaveLength(1);
     expect(items[0].title).toBe('Final call: we ship the dark theme.');
+  });
+});
+
+describe('SlackFetcher pagination, caps and the fetch report', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const human = (ts: string, text: string, user = 'U1', reply_count?: number): Msg =>
+    ({ ts, text, user, ...(reply_count !== undefined ? { reply_count } : {}) });
+  const thread = (ts: string, text: string): Msg => human(ts, text, 'U1', 2);
+  const repliesFor = (ts: string, text: string): Msg[] => [human(ts, text), human(`${ts}1`, 'reply one', 'U9'), human(`${ts}2`, 'reply two')];
+  const report = (opts: Record<string, unknown> = {}) =>
+    new SlackFetcher().fetchWithReport({ token: 't', interChannelDelayMs: 0, ...opts });
+  const channelIds = (calls: Array<{ endpoint: string; params: URLSearchParams }>) =>
+    calls.filter((c) => c.endpoint === 'conversations.history').map((c) => c.params.get('channel'));
+
+  it('scans channels from every conversations.list page', async () => {
+    // R10a
+    const calls = serve({
+      channels: [{ rows: [{ id: 'C1', name: 'eng' }] }, { rows: [{ id: 'C2', name: 'ops' }] }],
+      history: { C1: [thread('1.1', 'A')], C2: [thread('2.1', 'B')] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '2.1': repliesFor('2.1', 'B') },
+    });
+    const { items, report: r } = await report();
+    expect(items.map((i) => i.title)).toEqual(['A', 'B']);
+    const lists = calls.filter((c) => c.endpoint === 'conversations.list');
+    expect(lists).toHaveLength(2);
+    expect(lists[1].params.get('cursor')).toBe('P1');
+    expect(r.skips).toEqual([]);
+  });
+
+  it('stops at maxChannels and reports how many channels it did not scan', async () => {
+    // R10b, exact: the surplus is listed, and no cursor remains.
+    const calls = serve({
+      channels: [{ id: 'C1', name: 'a' }, { id: 'C2', name: 'b' }, { id: 'C3', name: 'c' }],
+      history: { C1: [thread('1.1', 'A')], C2: [thread('2.1', 'B')], C3: [thread('3.1', 'C')] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '2.1': repliesFor('2.1', 'B'), '3.1': repliesFor('3.1', 'C') },
+    });
+    const { items, report: r } = await report({ maxChannels: 2 });
+    expect(items.map((i) => i.title)).toEqual(['A', 'B']);
+    expect(channelIds(calls)).toEqual(['C1', 'C2']);
+    expect(r.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringContaining('channels not scanned') }]);
+  });
+
+  it('says "or more" when the channel cap fired with list pages still unread', async () => {
+    // R10b, second example: the count it can name is a floor, and the detail says so.
+    const calls = serve({
+      channels: [
+        { rows: [{ id: 'C1', name: 'a' }, { id: 'C2', name: 'b' }, { id: 'C3', name: 'c' }] },
+        { rows: [{ id: 'C4', name: 'd' }] },
+      ],
+      history: { C1: [thread('1.1', 'A')], C2: [thread('2.1', 'B')] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '2.1': repliesFor('2.1', 'B') },
+    });
+    const { report: r } = await report({ maxChannels: 2 });
+    expect(channelIds(calls)).toEqual(['C1', 'C2']);
+    expect(calls.filter((c) => c.endpoint === 'conversations.list')).toHaveLength(1); // did not read page 2 to count it
+    expect(r.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/^or more channels not scanned/) }]);
+  });
+
+  it('turns threads from every history page into items', async () => {
+    // R11a
+    const calls = serve({
+      history: { C1: [{ rows: [thread('1.1', 'A')] }, { rows: [thread('1.2', 'B')] }] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '1.2': repliesFor('1.2', 'B') },
+    });
+    const { items, report: r } = await report();
+    expect(items.map((i) => i.title)).toEqual(['A', 'B']);
+    const hist = calls.filter((c) => c.endpoint === 'conversations.history');
+    expect(hist).toHaveLength(2);
+    expect(hist[1].params.get('cursor')).toBe('P1');
+    expect(r.skips).toEqual([]);
+  });
+
+  it('stops history paging at maxHistoryPages and reports the channel it cut', async () => {
+    // R11b
+    const calls = serve({
+      history: { C1: [{ rows: [thread('1.1', 'A')] }, { rows: [thread('1.2', 'B')] }] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '1.2': repliesFor('1.2', 'B') },
+    });
+    const { items, report: r } = await report({ maxHistoryPages: 1 });
+    expect(items.map((i) => i.title)).toEqual(['A']);
+    expect(calls.filter((c) => c.endpoint === 'conversations.history')).toHaveLength(1);
+    expect(r.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringContaining('history') }]);
+  });
+
+  it('joins replies from every reply page into raw_text', async () => {
+    // R12a
+    const calls = serve({
+      history: { C1: [thread('1.1', 'A')] },
+      replies: { '1.1': [{ rows: [human('1.1', 'A'), human('1.2', 'first page reply', 'U9')] }, { rows: [human('1.3', 'second page reply', 'U9')] }] },
+    });
+    const { items } = await report();
+    expect(items).toHaveLength(1);
+    expect(items[0].raw_text).toContain('first page reply');
+    expect(items[0].raw_text).toContain('second page reply');
+    const rep = calls.filter((c) => c.endpoint === 'conversations.replies');
+    expect(rep).toHaveLength(2);
+    expect(rep[1].params.get('cursor')).toBe('P1');
+  });
+
+  it('keeps a thread cut at maxReplyPages as an item and reports the truncation', async () => {
+    // R12b: a truncated thread is not a dropped thread.
+    serve({
+      history: { C1: [thread('1.1', 'A')] },
+      replies: { '1.1': [{ rows: [human('1.1', 'A'), human('1.2', 'first page reply', 'U9')] }, { rows: [human('1.3', 'second page reply', 'U9')] }] },
+    });
+    const { items, report: r } = await report({ maxReplyPages: 1 });
+    expect(items).toHaveLength(1);
+    expect(items[0].raw_text).toContain('first page reply');
+    expect(items[0].raw_text).not.toContain('second page reply');
+    expect(r.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringContaining('repl') }]);
+  });
+
+  it('reports messages with fewer than 2 replies as not imported, by count', async () => {
+    // R13a
+    serve({
+      history: {
+        C1: [human('1.1', 'a'), human('1.2', 'b', 'U1', 0), human('1.3', 'c', 'U1', 1), human('1.4', 'd', 'U9', 1), human('1.5', 'e')],
+      },
+    });
+    const { items, report: r } = await report();
+    expect(items).toEqual([]);
+    expect(r.skips).toEqual([{ kind: 'shape', count: 5, detail: expect.stringContaining('fewer than 2 replies') }]);
+  });
+
+  it('reports threads with no human message as not imported, by count', async () => {
+    // The phase-3 drop, now visible: Open Question 1 in the plan says the demo
+    // seed's bot-posted threads must read as "N threads with no human message".
+    serve({
+      history: { C1: [{ ts: '1.1', subtype: 'tombstone', user: 'USLACKBOT', text: 'This message was deleted.', reply_count: 2 }, thread('2.1', 'A')] },
+      replies: {
+        '1.1': [{ ts: '1.1', subtype: 'tombstone', user: 'USLACKBOT', text: 'This message was deleted.' }, { ts: '1.2', bot_id: 'B1', text: 'bot' }],
+        '2.1': repliesFor('2.1', 'A'),
+      },
+    });
+    const { items, report: r } = await report();
+    expect(items.map((i) => i.title)).toEqual(['A']);
+    expect(r.scanned).toBe(2);
+    expect(r.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringContaining('no human message') }]);
+  });
+
+  it('keeps going when one channel cannot be read, and reports it', async () => {
+    // R14a
+    serve({
+      channels: [{ id: 'C1', name: 'a' }, { id: 'C2', name: 'b' }, { id: 'C3', name: 'c' }],
+      history: { C1: [thread('1.1', 'A')], C2: 'throw', C3: [thread('3.1', 'C')] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '3.1': repliesFor('3.1', 'C') },
+    });
+    const { items, report: r } = await report();
+    expect(items.map((i) => i.title)).toEqual(['A', 'C']);
+    expect(r.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringContaining('channels') }]);
+  });
+
+  it('keeps going when one thread cannot be read, and reports it', async () => {
+    // R14b
+    serve({
+      history: { C1: [thread('1.1', 'A'), thread('1.2', 'B')] },
+      replies: { '1.1': 'throw', '1.2': repliesFor('1.2', 'B') },
+    });
+    const { items, report: r } = await report();
+    expect(items.map((i) => i.title)).toEqual(['B']);
+    expect(r.scanned).toBe(2);
+    expect(r.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringContaining('threads') }]);
+  });
+
+  const tenChannels = Array.from({ length: 10 }, (_, i) => ({ id: `C${i + 1}`, name: `c${i + 1}` }));
+  const tenHistories = Object.fromEntries(tenChannels.map((c, i) => [c.id, [thread(`${i + 1}.1`, `T${i + 1}`)]]));
+  const tenReplies = Object.fromEntries(tenChannels.map((c, i) => [`${i + 1}.1`, repliesFor(`${i + 1}.1`, `T${i + 1}`)]));
+
+  it('stops requesting channels once the time budget is spent, and says so', async () => {
+    // R15a: each channel read costs one fake minute; the budget is spent before channel 4 of 10.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(0);
+    const calls = serve({
+      channels: tenChannels,
+      history: tenHistories,
+      replies: tenReplies,
+      onCall: (endpoint) => {
+        if (endpoint === 'conversations.history') vi.setSystemTime(Date.now() + 60_000);
+      },
+    });
+    const { items, report: r } = await report({ timeBudgetMs: 2.5 * 60_000 });
+    expect(channelIds(calls)).toEqual(['C1', 'C2', 'C3']);
+    expect(items.map((i) => i.title)).toEqual(['T1', 'T2', 'T3']);
+    expect(r.skips).toEqual([{ kind: 'time_budget', count: 7, detail: expect.stringContaining('time budget') }]);
+  });
+
+  it('scans every channel when the time budget is never spent', async () => {
+    // R15b
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(0);
+    const calls = serve({
+      channels: tenChannels,
+      history: tenHistories,
+      replies: tenReplies,
+      onCall: (endpoint) => {
+        if (endpoint === 'conversations.history') vi.setSystemTime(Date.now() + 60_000);
+      },
+    });
+    const { items, report: r } = await report({ timeBudgetMs: 60 * 60_000 });
+    expect(channelIds(calls)).toHaveLength(10);
+    expect(items).toHaveLength(10);
+    expect(r.skips).toEqual([]);
+  });
+
+  it('reports requested and scanned when the source holds fewer than asked', async () => {
+    // R21a
+    const threads = Array.from({ length: 30 }, (_, i) => thread(`${i + 1}.1`, `T${i + 1}`));
+    serve({
+      history: { C1: threads },
+      replies: Object.fromEntries(threads.map((t) => [t.ts, repliesFor(t.ts, t.text ?? '')])),
+    });
+    const { items, report: r } = await report({ limit: 50 });
+    expect(items).toHaveLength(30);
+    expect(r).toMatchObject({ platform: 'slack', requested: 50, scanned: 30 });
+  });
+
+  it('reports requested and scanned when the source holds more than asked', async () => {
+    // R21b
+    const threads = Array.from({ length: 80 }, (_, i) => thread(`${i + 1}.1`, `T${i + 1}`));
+    serve({
+      history: { C1: threads },
+      replies: Object.fromEntries(threads.map((t) => [t.ts, repliesFor(t.ts, t.text ?? '')])),
+    });
+    const { items, report: r } = await report({ limit: 50 });
+    expect(items).toHaveLength(50);
+    expect(r).toMatchObject({ platform: 'slack', requested: 50, scanned: 50 });
   });
 });

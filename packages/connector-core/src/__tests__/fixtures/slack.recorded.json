@@ -335,6 +335,17 @@
         "handle": "grace",
         "email": "grace@x.io"
       }
+    },
+    {
+      "source_url": "https://slack.com/archives/C3/p1712800000000700",
+      "platform": "slack",
+      "raw_text": "[#design] Thread:\nDesign review: dark theme is the default from 2.0\nFine by me, as long as light stays one click away.\nIt does. Shipping it.",
+      "title": "Design review: dark theme is the default from 2.0",
+      "author": {
+        "name": "Bob K",
+        "handle": "bob",
+        "email": "bob@x.io"
+      }
     }
   ]
 }

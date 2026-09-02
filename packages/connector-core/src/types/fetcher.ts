@@ -55,9 +55,48 @@ export interface FetcherPage {
   nextCursor?: string;
 }
 
+/**
+ * What a fetch could NOT reach, in the fetcher's own terms.
+ *
+ * Plumbing only: a count and a reason the fetcher measured. Never a judgement
+ * about whether an item was a decision - that stays on the proprietary side.
+ * The CLI prints these verbatim, which is why `detail` is written for a person
+ * and reads as a sentence after the count: "12 channels not scanned (...)".
+ */
+export interface FetchSkip {
+  /** page_cap: a page or item cap fired; time_budget: the fetcher's own deadline
+   *  fired; shape: the source object was not the kind this fetcher reads; error:
+   *  the provider refused or failed the read. */
+  kind: 'page_cap' | 'time_budget' | 'shape' | 'error';
+  count: number;
+  detail: string;
+}
+
+export interface FetchReport {
+  platform: string;
+  /** Source objects examined before any filter. `items.length` is a fraction OF this. */
+  scanned: number;
+  /** The cap the read was bounded by: `opts.limit`, or the fetcher's default when
+   *  none was given. Lets a caller say "30 of up to 50" without re-deriving it. */
+  requested?: number;
+  skips: FetchSkip[];
+}
+
+export interface FetchResult {
+  items: FetcherItem[];
+  report: FetchReport;
+}
+
 export interface ConnectorFetcher {
   /** Single-shot read used by the CLI personal import. */
   fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]>;
   /** Optional paged read used by the discover scan. Defaults can wrap `fetch`. */
   fetchPage?(opts: ConnectorFetcherOptions): Promise<FetcherPage>;
+  /**
+   * The same read as {@link fetch}, plus what it could not reach. Optional so
+   * every existing implementation (in this repo and in anyone else's) still
+   * satisfies the interface unchanged. Where both exist, `fetch` must return
+   * exactly `(await fetchWithReport(opts)).items`.
+   */
+  fetchWithReport?(opts: ConnectorFetcherOptions): Promise<FetchResult>;
 }
