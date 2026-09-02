@@ -56,6 +56,25 @@ jobs:
   # of leaving it empty, so publish never gets to try OIDC cleanly. Force it
   # empty explicitly rather than bumping setup-node three majors under time
   # pressure; that bump is a reasonable follow-up, not an urgent one.
+  #
+  # Fixing that got us to a DIFFERENT error, ENEEDAUTH - no auth attempted at
+  # all, not even OIDC. Root cause: pnpm's OIDC exchange for `publish` was
+  # added by pnpm/action-setup#10591 ("feat!: replace npm publish with
+  # libnpmpublish"), merged 2026-02-12 - over a month after our pinned
+  # pnpm@10.28.0 (released 2026-01-09). Confirmed empirically too: no pnpm
+  # 10.x changelog anywhere mentions libnpmpublish/OIDC-publish, and a local
+  # pnpm@10.28.0 run makes zero OIDC attempt before failing. The capability
+  # requires pnpm 11+, which in turn requires Node 22+ (pnpm 11's own release
+  # notes). Bumped both, scoped to this job only - `ci.yaml`'s test matrix
+  # still needs Node 20, so its own pnpm pin stays untouched.
+  #
+  # pnpm's own version-management (separate from corepack) auto-downgrades
+  # a mismatched invocation back to whatever package.json's "packageManager"
+  # says - verified locally: running the 11.25.0 binary directly still
+  # printed "using pnpm v10.28.0" and silently no-opped the whole point of
+  # this bump. --pm-on-fail=ignore on the install step is required to stop
+  # that; packageManager stays at 10.28.0 deliberately; see above, ci.yaml
+  # needs that value unchanged for its own job.
   publish:
     needs: release-please
     # workflow_dispatch is a manual retry escape hatch (e.g. the publish step
@@ -73,15 +92,21 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10.28.0
+          # Not the repo-wide pin (package.json "packageManager", ci.yaml) -
+          # OIDC publish needs pnpm 11+, scoped to this job only. See the
+          # comment above the job.
+          version: 11.25.0
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22' # pnpm 11 requires Node 22+
           registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
 
-      - run: pnpm install --frozen-lockfile
+      # --pm-on-fail=ignore: without it pnpm silently re-execs as whatever
+      # package.json's "packageManager" says (10.28.0) and this whole bump
+      # is a no-op. See the comment above the job.
+      - run: pnpm --pm-on-fail=ignore install --frozen-lockfile
 
       - name: Build
         run: pnpm -r run build
