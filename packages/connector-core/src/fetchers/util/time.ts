@@ -14,6 +14,8 @@
 export function toIsoOrUndefined(value: string | number | undefined | null): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const ms = typeof value === 'number' ? value : Date.parse(value);
-  if (Number.isNaN(ms)) return undefined;
+  // A zero or negative instant is not a source date either: Number('') is 0, and
+  // an epoch stamp in a decision graph is a fabrication with a plausible face.
+  if (Number.isNaN(ms) || ms <= 0) return undefined;
   return new Date(ms).toISOString();
 }

@@ -1,5 +1,5 @@
 /**
- * The fetch report holds for EVERY fetcher, not only the ones ALI-828 paged:
+ * The fetch report holds for EVERY fetcher, including the six ALI-828 did not page:
  * `fetch()` is `(await fetchWithReport()).items` (one implementation, two entry
  * points), and every report names its platform and counts at least as many
  * scanned objects as it returned items. The golden fixtures serve as the

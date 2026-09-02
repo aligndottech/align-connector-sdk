@@ -40,6 +40,7 @@ describe('toIsoOrUndefined', () => {
     ['an empty string', ''],
     ['prose', 'yesterday'],
     ['NaN', Number.NaN],
+    ['a numeric zero (Number of a blank string)', 0],
   ])('returns undefined for %s rather than a fabricated now', (_label, input) => {
     expect(toIsoOrUndefined(input)).toBeUndefined();
   });
@@ -98,7 +99,9 @@ const CASES: Array<{ platform: string; expected: string; run: () => Promise<Fetc
     expected: '2026-01-05T08:30:00.000Z',
     run: () => {
       route({
-        '/api/v2/pages': { results: [{ title: 'P', version: { createdAt: '2026-01-05T08:30:00Z' }, _links: { webui: '/p/1' } }], _links: { base: 'https://acme.atlassian.net/wiki' } },
+        // Both dates present, deliberately different: the fetcher reads the current version's
+        // date (the page as it now stands), matching the hosted scan's decided_at for Confluence.
+        '/api/v2/pages': { results: [{ title: 'P', createdAt: '2020-06-01T00:00:00Z', version: { createdAt: '2026-01-05T08:30:00Z' }, _links: { webui: '/p/1' } }], _links: { base: 'https://acme.atlassian.net/wiki' } },
       });
       return new ConfluenceFetcher().fetch({ token: 't', cloudId: 'c' });
     },

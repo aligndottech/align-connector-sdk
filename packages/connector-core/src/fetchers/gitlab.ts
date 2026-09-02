@@ -40,8 +40,11 @@ export class GitLabFetcher implements ConnectorFetcher {
     let scanned = 0;
     let pagesUnreadable = 0;
 
+    // Constant for the whole run: `page` is an offset in units of per_page, so
+    // shrinking per_page on a later page moves the window backwards and re-reads
+    // rows already returned. The limit is enforced by stopping, not by the page.
+    const perPage = Math.min(limit, GITLAB_PAGE_MAX);
     for (let page = 1; items.length < limit; page++) {
-      const perPage = Math.min(limit - items.length, GITLAB_PAGE_MAX);
       const mrRes = await fetch(
         `${base}/merge_requests?author_id=${user.id}&state=merged&per_page=${perPage}&page=${page}&order_by=updated_at`,
         { headers },

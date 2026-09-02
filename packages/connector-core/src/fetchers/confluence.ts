@@ -13,7 +13,9 @@ function stripHtml(html: string): string {
 interface ConfluencePageV2 {
   title: string;
   authorId?: string;
-  /** The latest revision's date. The page's own createdAt is the first draft. */
+  /** The current version's date: the page as it now stands, which is also what
+   *  the hosted scan records as decided_at for Confluence. The page's own
+   *  top-level createdAt is the first draft. */
   version?: { createdAt?: string };
   body?: { storage?: { value?: string } };
   _links?: { webui?: string };

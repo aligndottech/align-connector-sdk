@@ -17,9 +17,34 @@ interface ZoomMeeting {
   recording_files?: ZoomRecordingFile[];
 }
 
-// Zoom's own per-page maximum for /users/me/recordings. Before ALI-828 this was
-// the whole read: one page of 30, whatever the caller asked for.
-const ZOOM_PAGE_MAX = 30;
+// Zoom's documented page_size maximum for /users/me/recordings. 30 is the default,
+// and before ALI-828 it was the whole read: one page of 30, whatever the caller
+// asked for. Held constant across next_page_token requests, as Zoom requires.
+const ZOOM_PAGE_MAX = 300;
+
+// Zoom lists recordings for a from/to window at most a month wide, and with
+// neither parameter it lists only the current day. So a read walks windows back
+// through `daysBack`, newest first; a boundary day can appear in two windows,
+// which is what the uuid dedupe below is for.
+const ZOOM_WINDOW_DAYS = 30;
+const DAY_MS = 86_400_000;
+
+function isoDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** Day windows covering the last `daysBack` days, newest first. */
+function recordingWindows(now: number, daysBack: number): Array<{ from: string; to: string }> {
+  const windows: Array<{ from: string; to: string }> = [];
+  let to = Math.floor(now / DAY_MS) * DAY_MS;
+  const oldest = to - daysBack * DAY_MS;
+  while (to > oldest) {
+    const from = Math.max(to - (ZOOM_WINDOW_DAYS - 1) * DAY_MS, oldest);
+    windows.push({ from: isoDay(from), to: isoDay(to) });
+    to = from - DAY_MS;
+  }
+  return windows;
+}
 
 function parseWebVtt(vtt: string): string {
   return vtt
@@ -55,7 +80,8 @@ async function zoomGet<T>(path: string, token: string): Promise<T> {
 /**
  * Read-only personal Zoom fetcher: cloud-recording transcripts (VTT), parsed to
  * plain text. Author = the meeting host. `uuid` (single meeting) rides on opts.
- * Pages `/users/me/recordings` with `next_page_token` up to `limit`; a meeting
+ * Lists `/users/me/recordings` in 30-day windows back through `daysBack`
+ * (default 90), paging each with `next_page_token` up to `limit`; a meeting
  * with no completed transcript, or one whose transcript will not download, is
  * counted into the report rather than dropped in silence.
  */
@@ -66,22 +92,31 @@ export class ZoomFetcher implements ConnectorFetcher {
 
   async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const limit = opts.limit ?? 30;
+    const daysBack = (opts.daysBack as number | undefined) ?? 90;
     const uuid = opts.uuid as string | undefined;
+    const pageSize = Math.min(limit, ZOOM_PAGE_MAX);
     const items: FetcherItem[] = [];
+    const seen = new Set<string>();
     let scanned = 0;
     let noTranscript = 0;
     let unreadable = 0;
-    let pageToken: string | undefined;
 
-    do {
+    // The single-meeting path has no window and is one request by construction.
+    const windows: Array<{ from: string; to: string } | undefined> = uuid ? [undefined] : recordingWindows(Date.now(), daysBack);
+    for (const window of windows) {
+      if (items.length >= limit) break;
+      let pageToken: string | undefined;
+      do {
       const path = uuid
         ? `/meetings/${encodeMeetingUuid(uuid)}/recordings`
-        : `/users/me/recordings?page_size=${Math.min(limit - items.length, ZOOM_PAGE_MAX)}` +
+        : `/users/me/recordings?page_size=${pageSize}&from=${window!.from}&to=${window!.to}` +
           (pageToken ? `&next_page_token=${encodeURIComponent(pageToken)}` : '');
       const data = await zoomGet<{ meetings?: ZoomMeeting[]; next_page_token?: string }>(path, opts.token);
 
       for (const meeting of data.meetings ?? []) {
         if (items.length >= limit) break;
+        if (seen.has(meeting.uuid)) continue;
+        seen.add(meeting.uuid);
         scanned += 1;
         const vttFile = (meeting.recording_files ?? []).find(
           (f) => f.file_type === 'TRANSCRIPT' && f.status === 'completed',
@@ -121,9 +156,9 @@ export class ZoomFetcher implements ConnectorFetcher {
           unreadable += 1;
         }
       }
-      // The single-meeting path is one request by construction.
       pageToken = uuid ? undefined : data.next_page_token || undefined;
-    } while (pageToken && items.length < limit);
+      } while (pageToken && items.length < limit);
+    }
 
     const skips: FetchSkip[] = [];
     if (noTranscript > 0) skips.push({ kind: 'shape', count: noTranscript, detail: 'meetings with no completed transcript' });

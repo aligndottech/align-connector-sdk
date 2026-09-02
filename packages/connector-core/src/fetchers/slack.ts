@@ -41,10 +41,22 @@ interface SlackChannel {
  * `align setup --local` budget leaves for Slack once the other sources are paid
  * for. The reference workspace (61 channels) reaches neither.
  */
-const SLACK_PAGE_SIZE = 100;
 const SLACK_MAX_CHANNELS = 200;
-const SLACK_MAX_HISTORY_PAGES = 5; // 500 messages inside the daysBack window
-const SLACK_MAX_REPLY_PAGES = 3; // 300 messages in one thread
+const SLACK_MAX_HISTORY_PAGES = 5; // ~5,000 messages inside the daysBack window
+const SLACK_MAX_REPLY_PAGES = 3; // ~3,000 messages in one thread
+
+/**
+ * Page sizes at each endpoint's documented maximum: "under 1000" for list and
+ * history, 1000 (the default and the max) for replies. 0.5.0 sent
+ * conversations.replies with no limit, so a thread of up to 1000 messages came
+ * back in one call; a smaller page here would cut a KEPT thread at
+ * maxReplyPages and move its bytes, which the golden contract forbids. Slack's
+ * 2025 15-object cap applies only to commercially distributed non-Marketplace
+ * apps; a user's own app, which is what the CLI token belongs to, is exempt.
+ */
+const SLACK_LIST_PAGE_SIZE = 999;
+const SLACK_HISTORY_PAGE_SIZE = 999;
+const SLACK_REPLIES_PAGE_SIZE = 1000;
 const SLACK_TIME_BUDGET_MS = 8 * 60_000;
 
 /**
@@ -71,9 +83,19 @@ const SYSTEM_SUBTYPES = new Set([
   'group_join',
   'group_leave',
   'pinned_item',
+  'unpinned_item',
   'bot_add',
   'bot_remove',
   'reminder_add',
+  'group_topic',
+  'group_purpose',
+  'group_name',
+  'group_archive',
+  'group_unarchive',
+  'channel_convert_to_private',
+  'channel_convert_to_public',
+  'channel_posting_permissions',
+  'ekm_access_denied',
 ]);
 
 /**
@@ -88,6 +110,8 @@ const SYSTEM_SUBTYPES = new Set([
  */
 function isHumanMessage(m: SlackMessage): boolean {
   if (m.bot_id) return false;
+  // A fired /remind or a Slackbot reply carries no bot_id and no subtype, only this user.
+  if (m.user === 'USLACKBOT') return false;
   if (m.subtype && SYSTEM_SUBTYPES.has(m.subtype)) return false;
   return Boolean(m.user);
 }
@@ -184,7 +208,7 @@ export class SlackFetcher implements ConnectorFetcher {
     const list = await slackPaged<SlackChannel>(
       'conversations.list',
       opts.token,
-      { types: 'public_channel,private_channel', exclude_archived: 'true', limit: String(SLACK_PAGE_SIZE) },
+      { types: 'public_channel,private_channel', exclude_archived: 'true', limit: String(SLACK_LIST_PAGE_SIZE) },
       'channels',
       Number.POSITIVE_INFINITY,
       (rows) => rows.length > maxChannels,
@@ -218,7 +242,7 @@ export class SlackFetcher implements ConnectorFetcher {
         const hist = await slackPaged<SlackMessage>(
           'conversations.history',
           opts.token,
-          { channel: channel.id, oldest, limit: String(SLACK_PAGE_SIZE) },
+          { channel: channel.id, oldest, limit: String(SLACK_HISTORY_PAGE_SIZE) },
           'messages',
           maxHistoryPages,
         );
@@ -233,14 +257,22 @@ export class SlackFetcher implements ConnectorFetcher {
             const replies = await slackPaged<SlackMessage>(
               'conversations.replies',
               opts.token,
-              { channel: channel.id, ts: thread.ts, limit: String(SLACK_PAGE_SIZE) },
+              { channel: channel.id, ts: thread.ts, limit: String(SLACK_REPLIES_PAGE_SIZE) },
               'messages',
               maxReplyPages,
             );
             // A truncated thread is still an item; dropping it would lose the
             // decision to protect a byte count. The truncation is reported instead.
             if (replies.truncated) repliesCut += 1;
-            const allMsgs = replies.rows;
+            // Dedupe by ts: Slack does not say whether a cursor page of replies carries
+            // the parent again, and a repeated root would double its text.
+            const seenTs = new Set<string>();
+            const allMsgs: SlackMessage[] = [];
+            for (const m of replies.rows) {
+              if (seenTs.has(m.ts)) continue;
+              seenTs.add(m.ts);
+              allMsgs.push(m);
+            }
             // The thread's identity comes from the first HUMAN message: a deleted or
             // bot root has no title and nobody to attribute, but the conversation
             // under it may be entirely real.
@@ -276,7 +308,7 @@ export class SlackFetcher implements ConnectorFetcher {
     // A fixed order, so two runs over the same workspace print the same report.
     const skips: FetchSkip[] = [];
     if (shortMessages > 0) {
-      skips.push({ kind: 'shape', count: shortMessages, detail: 'messages with fewer than 2 replies (local mode reads threads only)' });
+      skips.push({ kind: 'shape', count: shortMessages, detail: 'messages with fewer than 2 replies (this fetcher reads threads only)' });
     }
     if (noHumanThreads > 0) {
       skips.push({ kind: 'shape', count: noHumanThreads, detail: 'threads with no human message (bot or system output only)' });

@@ -29,9 +29,13 @@ export interface FetcherItem {
   /** Who to talk to about this item (decision owner / author), when resolvable. */
   author?: DecisionAuthor;
   /**
-   * When the SOURCE says this was created, ISO-8601 Z. The source's own date,
-   * never the fetch time: absent means the platform did not say, and a
-   * consumer that wants "now" must write it itself where it can be seen.
+   * The source's own timestamp for this item, ISO-8601 Z: when it was created
+   * on most platforms, and for Confluence the current version's date (the page
+   * as it now stands), which is what the hosted scan records as decided_at for
+   * Confluence too. Never the fetch time: absent means the platform did not
+   * say, and a consumer that wants "now" must write it itself where it can be
+   * seen, because a plausible wrong date is indistinguishable from a
+   * measurement downstream.
    */
   created_at?: string;
 }
@@ -80,11 +84,19 @@ export interface FetchSkip {
 
 export interface FetchReport {
   platform: string;
-  /** Source objects examined before any filter. `items.length` is a fraction OF this. */
+  /** Source objects examined before any filter, in the fetcher's own unit (Slack
+   *  counts threads). `items.length` is never more than this. */
   scanned: number;
   /** The cap the read was bounded by: `opts.limit`, or the fetcher's default when
    *  none was given. Lets a caller say "30 of up to 50" without re-deriving it. */
   requested?: number;
+  /**
+   * Lines for a person, not terms of an equation. A skip's count is in whatever
+   * unit its detail names, which need not be `scanned`'s (Slack's short-message
+   * skip counts messages while `scanned` counts threads); skips are not disjoint
+   * from `items` (a thread cut at a page cap is kept AND reported) nor from each
+   * other. Do not reconcile `scanned - skips = items`.
+   */
   skips: FetchSkip[];
 }
 

@@ -116,7 +116,7 @@ describe('SlackFetcher keeps a thread only when a human said something', () => {
     expect(await fetchAll()).toEqual([]);
   });
 
-  it('drops a bot-rooted thread too, not only a tombstone-rooted one', async () => {
+  it('drops a bot-rooted thread as well as a tombstone-rooted one', async () => {
     // R7b: forces the rule to be "no human message", not "the root is a tombstone".
     serve({
       history: { C1: [{ ts: '2.1', subtype: 'bot_message', bot_id: 'B1', text: 'Build failed', reply_count: 2 }] },
@@ -182,9 +182,19 @@ describe('SlackFetcher keeps a thread only when a human said something', () => {
     'group_join',
     'group_leave',
     'pinned_item',
+    'unpinned_item',
     'bot_add',
     'bot_remove',
     'reminder_add',
+    'group_topic',
+    'group_purpose',
+    'group_name',
+    'group_archive',
+    'group_unarchive',
+    'channel_convert_to_private',
+    'channel_convert_to_public',
+    'channel_posting_permissions',
+    'ekm_access_denied',
   ])('treats subtype %s as the workspace talking, not a person', async (subtype) => {
     // Each denylist member asserted on its own: a thread made only of this
     // subtype (with a user id on it, as Slack system messages carry) is dropped.
@@ -194,6 +204,22 @@ describe('SlackFetcher keeps a thread only when a human said something', () => {
         '5.1': [
           { ts: '5.1', subtype, user: 'U1', text: `system ${subtype}` },
           { ts: '5.2', subtype, user: 'U1', text: `system ${subtype} again` },
+        ],
+      },
+    });
+    expect(await fetchAll()).toEqual([]);
+  });
+
+  it('treats Slackbot as the workspace even when its message carries no subtype', async () => {
+    // A fired /remind or a Slackbot response has user USLACKBOT, no bot_id and no subtype, so
+    // the shape test alone would make it the "first human" and title the thread from it.
+    serve({
+      history: { C1: [{ ts: '7.1', user: 'USLACKBOT', text: 'Reminder: standup at 10.', reply_count: 2 }] },
+      replies: {
+        '7.1': [
+          { ts: '7.1', user: 'USLACKBOT', text: 'Reminder: standup at 10.' },
+          { ts: '7.2', bot_id: 'B1', text: 'ok' },
+          { ts: '7.3', bot_id: 'B1', text: 'ok again' },
         ],
       },
     });
@@ -279,6 +305,32 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     expect(r.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/^or more channels not scanned/) }]);
   });
 
+  it('reads the next list page when the first holds exactly the cap, and names the surplus exactly', async () => {
+    // The boundary: a page holding exactly maxChannels channels with a cursor behind it. The
+    // fetcher must read on (a `>=` here would stop, see nothing past the cap, and emit no
+    // skip while unscanned channels exist). A fresh-context mutant run found that untested.
+    const calls = serve({
+      channels: [{ rows: [{ id: 'C1', name: 'a' }, { id: 'C2', name: 'b' }] }, { rows: [{ id: 'C3', name: 'c' }] }],
+      history: { C1: [thread('1.1', 'A')], C2: [thread('2.1', 'B')] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '2.1': repliesFor('2.1', 'B') },
+    });
+    const { items, report: r } = await report({ maxChannels: 2 });
+    expect(calls.filter((c) => c.endpoint === 'conversations.list')).toHaveLength(2);
+    expect(items.map((i) => i.title)).toEqual(['A', 'B']);
+    expect(r.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/^channels not scanned/) }]);
+  });
+
+  it('emits no channel skip when the workspace holds exactly the cap', async () => {
+    serve({
+      channels: [{ rows: [{ id: 'C1', name: 'a' }, { id: 'C2', name: 'b' }] }, { rows: [] }],
+      history: { C1: [thread('1.1', 'A')], C2: [thread('2.1', 'B')] },
+      replies: { '1.1': repliesFor('1.1', 'A'), '2.1': repliesFor('2.1', 'B') },
+    });
+    const { items, report: r } = await report({ maxChannels: 2 });
+    expect(items.map((i) => i.title)).toEqual(['A', 'B']);
+    expect(r.skips).toEqual([]);
+  });
+
   it('turns threads from every history page into items', async () => {
     // R11a
     const calls = serve({
@@ -318,6 +370,38 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     const rep = calls.filter((c) => c.endpoint === 'conversations.replies');
     expect(rep).toHaveLength(2);
     expect(rep[1].params.get('cursor')).toBe('P1');
+  });
+
+  it('asks each endpoint for its documented maximum page, so the page caps bound generously', async () => {
+    // 0.5.0 sent conversations.replies with no limit, and Slack's default there is 1000 (also
+    // the max). Paging at 100 would have cut a 301-message thread at maxReplyPages, moving the
+    // bytes of a KEPT item, which the golden contract forbids. list and history must be under
+    // 1000. A fresh-context review caught the regression.
+    const calls = serve({
+      history: { C1: [thread('1.1', 'A')] },
+      replies: { '1.1': repliesFor('1.1', 'A') },
+    });
+    await report();
+    const limitOf = (endpoint: string) => calls.filter((c) => c.endpoint === endpoint).map((c) => c.params.get('limit'));
+    expect(limitOf('conversations.list')).toEqual(['999']);
+    expect(limitOf('conversations.history')).toEqual(['999']);
+    expect(limitOf('conversations.replies')).toEqual(['1000']);
+  });
+
+  it('does not repeat the root when a later reply page carries the parent again', async () => {
+    // Slack does not document whether cursor pages of conversations.replies repeat the parent
+    // message. Dedupe by ts costs nothing and makes the question moot.
+    serve({
+      history: { C1: [thread('1.1', 'A')] },
+      replies: {
+        '1.1': [
+          { rows: [human('1.1', 'A'), human('1.2', 'first page reply', 'U9')] },
+          { rows: [human('1.1', 'A'), human('1.3', 'second page reply', 'U9')] },
+        ],
+      },
+    });
+    const { items } = await report();
+    expect(items[0].raw_text).toBe('[#eng] Thread:\nA\nfirst page reply\nsecond page reply');
   });
 
   it('keeps a thread cut at maxReplyPages as an item and reports the truncation', async () => {
@@ -405,6 +489,47 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     expect(channelIds(calls)).toEqual(['C1', 'C2', 'C3']);
     expect(items.map((i) => i.title)).toEqual(['T1', 'T2', 'T3']);
     expect(r.skips).toEqual([{ kind: 'time_budget', count: 7, detail: expect.stringContaining('time budget') }]);
+  });
+
+  it('spends the whole budget: a channel starting exactly at the deadline is still read', async () => {
+    // Pins the operator (`>` rather than `>=`): with a 3-minute budget and one minute per channel,
+    // the check before channel 4 sees exactly 3 minutes and reads it; channel 5 sees 4 and stops.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(0);
+    const calls = serve({
+      channels: tenChannels,
+      history: tenHistories,
+      replies: tenReplies,
+      onCall: (endpoint) => {
+        if (endpoint === 'conversations.history') vi.setSystemTime(Date.now() + 60_000);
+      },
+    });
+    const { report: r } = await report({ timeBudgetMs: 3 * 60_000 });
+    expect(channelIds(calls)).toEqual(['C1', 'C2', 'C3', 'C4']);
+    expect(r.skips).toEqual([{ kind: 'time_budget', count: 6, detail: expect.stringContaining('time budget') }]);
+  });
+
+  it('checks the budget BEFORE paying the inter-channel delay', async () => {
+    // Placement: once the budget is spent no delay is paid, so setTimeout is called once per
+    // channel actually read after the first (2 for 3 channels), never for the channel it refuses.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(0);
+    const sleeps = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) => {
+      fn();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as never);
+    serve({
+      channels: tenChannels,
+      history: tenHistories,
+      replies: tenReplies,
+      onCall: (endpoint) => {
+        if (endpoint === 'conversations.history') vi.setSystemTime(Date.now() + 60_000);
+      },
+    });
+    const { items } = await report({ timeBudgetMs: 2.5 * 60_000, interChannelDelayMs: 1000 });
+    expect(items).toHaveLength(3);
+    expect(sleeps).toHaveBeenCalledTimes(2);
+    sleeps.mockRestore();
   });
 
   it('scans every channel when the time budget is never spent', async () => {

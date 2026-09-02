@@ -113,9 +113,11 @@ describe('ZoomFetcher', () => {
   });
 
   it('skips meetings without a completed transcript', async () => {
-    mockFetch.mockResolvedValueOnce(ok({ meetings: [{ id: 1, uuid: 'u', topic: 't', start_time: '2026-01-01', recording_files: [] }] }));
-    const items = await new ZoomFetcher().fetch({ token: 'tok' });
+    // Every dated window sees the same meeting; the uuid dedupe keeps it to one scan.
+    mockFetch.mockResolvedValue(ok({ meetings: [{ id: 1, uuid: 'u', topic: 't', start_time: '2026-01-01', recording_files: [] }] }));
+    const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'tok' });
     expect(items).toEqual([]);
+    expect(report.scanned).toBe(1);
   });
 });
 
@@ -132,37 +134,69 @@ describe('ZoomFetcher pagination and report (ALI-828)', () => {
     recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url: `https://zoom.us/dl/${n}` }],
   });
   const meetings = (from: number, count: number) => Array.from({ length: count }, (_, i) => meeting(from + i));
+  /** Serve one dated window's pages by token; any other window is empty. Zoom lists recordings
+   *  per `from`/`to` window, so a fetcher that ignores the window it asked for would read the
+   *  same page again under every window. */
   const serveZoom = (pages: Record<string, unknown>) => {
     const calls: string[] = [];
+    let servedFrom: string | null = null;
     mockFetch.mockImplementation((async (input: unknown) => {
       const url = String(input);
       calls.push(url);
       if (url.includes('/dl/')) return text('WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nwe decided\n');
-      const token = new URL(url).searchParams.get('next_page_token') ?? '';
-      return ok(pages[token]);
+      const params = new URL(url).searchParams;
+      servedFrom ??= params.get('from');
+      if (params.get('from') !== servedFrom) return ok({ meetings: [], next_page_token: '' });
+      return ok(pages[params.get('next_page_token') ?? '']);
     }) as never);
     return calls;
   };
   const recordingCalls = (calls: string[]) => calls.filter((u) => u.includes('/users/me/recordings'));
 
-  it('pages with next_page_token until the requested limit is reached', async () => {
-    // R18a: limit 50 from two pages of 30; the second request carries the token and asks for only what is left.
-    const calls = serveZoom({ '': { meetings: meetings(1, 30), next_page_token: 'Z2' }, Z2: { meetings: meetings(31, 30), next_page_token: '' } });
-    const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 50 });
-    expect(items).toHaveLength(50);
+  it('pages with next_page_token until the requested limit is reached, keeping page_size identical', async () => {
+    // R18a: limit 350 from two pages of 300 (Zoom's documented page_size max). Zoom's pagination
+    // guide says every query parameter other than the token must stay identical across requests,
+    // so the second request carries the token and the SAME page_size; the limit is enforced by
+    // stopping, not by shrinking the page. A fresh-context review caught the first cut shrinking it.
+    const calls = serveZoom({ '': { meetings: meetings(1, 300), next_page_token: 'Z2' }, Z2: { meetings: meetings(301, 300), next_page_token: '' } });
+    const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 350, daysBack: 30 });
+    expect(items).toHaveLength(350);
+    expect(new Set(items.map((i) => i.source_url)).size).toBe(350);
     const rec = recordingCalls(calls);
     expect(rec).toHaveLength(2);
-    expect(rec[0]).toContain('page_size=30');
+    expect(rec[0]).toContain('page_size=300');
     expect(rec[0]).not.toContain('next_page_token');
     expect(rec[1]).toContain('next_page_token=Z2');
-    expect(rec[1]).toContain('page_size=20');
-    expect(report).toMatchObject({ platform: 'zoom', requested: 50, scanned: 50, skips: [] });
+    expect(rec[1]).toContain('page_size=300');
+    expect(report).toMatchObject({ platform: 'zoom', requested: 350, scanned: 350, skips: [] });
+  });
+
+  it('lists recordings in 30-day windows back to daysBack, newest first, because Zoom lists only today by default', async () => {
+    // Without from/to the endpoint returns the current day, so 0.5.0's Zoom import saw almost
+    // nothing and no report could have said why. Zoom allows at most a month per request.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-03-31T12:00:00Z'));
+    const calls = serveZoom({ '': { meetings: [], next_page_token: '' } });
+    await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 50 });
+    vi.useRealTimers();
+    const windows = recordingCalls(calls).map((u) => {
+      const p = new URL(u).searchParams;
+      return `${p.get('from')}..${p.get('to')}`;
+    });
+    expect(windows).toEqual(['2026-03-02..2026-03-31', '2026-01-31..2026-03-01', '2026-01-01..2026-01-30']);
+  });
+
+  it('stops opening older windows once the limit is reached', async () => {
+    const calls = serveZoom({ '': { meetings: meetings(1, 5), next_page_token: '' } });
+    const { items } = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 5, daysBack: 90 });
+    expect(items).toHaveLength(5);
+    expect(recordingCalls(calls)).toHaveLength(1);
   });
 
   it('asks for exactly the limit when it is under a page, and makes one request', async () => {
     // R18b: never over-fetch a fixed 30.
     const calls = serveZoom({ '': { meetings: meetings(1, 10), next_page_token: 'Z2' } });
-    const items = await new ZoomFetcher().fetch({ token: 'tok', limit: 10 });
+    const items = await new ZoomFetcher().fetch({ token: 'tok', limit: 10, daysBack: 30 });
     expect(items).toHaveLength(10);
     const rec = recordingCalls(calls);
     expect(rec).toHaveLength(1);
