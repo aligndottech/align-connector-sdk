@@ -20,11 +20,58 @@ interface SlackMessage {
   text?: string;
   reply_count?: number;
   user?: string;
+  bot_id?: string;
+  subtype?: string;
 }
 
 interface SlackChannel {
   id: string;
   name: string;
+}
+
+/**
+ * Message subtypes that are the WORKSPACE talking, not a person: joins, leaves,
+ * topic changes, pins, and app output. A thread made only of these is machinery,
+ * and on the Align demo workspace 35 of 39 captured "threads" were exactly that -
+ * a tombstone root under the Align app's own replies (ALI-828).
+ *
+ * A closed denylist rather than "any subtype at all": `thread_broadcast` is a
+ * human reply that was also posted to the channel, and `file_share` is a human
+ * sharing a file with a comment. Both are decision content and both carry a
+ * subtype. Every member here has its own case in fetchers.slack.test.ts.
+ */
+const SYSTEM_SUBTYPES = new Set([
+  'bot_message',
+  'tombstone',
+  'channel_join',
+  'channel_leave',
+  'channel_topic',
+  'channel_purpose',
+  'channel_name',
+  'channel_archive',
+  'channel_unarchive',
+  'group_join',
+  'group_leave',
+  'pinned_item',
+  'bot_add',
+  'bot_remove',
+  'reminder_add',
+]);
+
+/**
+ * A message a person wrote. `bot_id` catches an app posting AS a user (which
+ * carries no subtype at all), and a message with no `user` has nobody to
+ * attribute it to.
+ *
+ * Deliberately not "is this the Align bot": the CLI's Slack path uses a user
+ * token, whose `auth.test` names the HUMAN, so an identity filter would delete
+ * the user's own messages. The shape test catches Align's bot as one member of
+ * the class of all bots, and stays vendor-neutral.
+ */
+function isHumanMessage(m: SlackMessage): boolean {
+  if (m.bot_id) return false;
+  if (m.subtype && SYSTEM_SUBTYPES.has(m.subtype)) return false;
+  return Boolean(m.user);
 }
 
 /** Resolve a Slack user id to a display name (cached - one users.info call per unique user). */
@@ -57,8 +104,12 @@ function makeUserResolver(token: string) {
 
 /**
  * Read-only personal Slack fetcher: threaded conversations (>=2 replies) the
- * token can see, within `daysBack`. Author = the thread starter. A delay between
- * channels keeps under Slack's Tier-2 rate limit (override via `interChannelDelayMs`).
+ * token can see, within `daysBack`, that hold at least one HUMAN message. Title
+ * and author come from the first human message, so a thread whose root was
+ * deleted or posted by a bot is still captured when a person spoke in it, and a
+ * thread made only of bot and system output is not captured at all. A delay
+ * between channels keeps under Slack's Tier-2 rate limit (override via
+ * `interChannelDelayMs`).
  */
 export class SlackFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
@@ -100,13 +151,21 @@ export class SlackFetcher implements ConnectorFetcher {
               ts: thread.ts,
             });
             const allMsgs = (replies.messages as SlackMessage[]) ?? [];
+            // The thread's identity comes from the first HUMAN message: a deleted or
+            // bot root has no title and nobody to attribute, but the conversation
+            // under it may be entirely real.
+            const firstHuman = allMsgs.find(isHumanMessage);
+            if (!firstHuman) continue; // machinery, not a conversation
+
+            // Every fetched message, bot replies included: a bot reply inside a human
+            // thread is often the CI output being discussed.
             const text = allMsgs.map((m) => m.text ?? '').join('\n');
-            const author = await resolveUser(allMsgs[0]?.user ?? thread.user);
+            const author = await resolveUser(firstHuman.user);
             items.push({
               source_url: `https://slack.com/archives/${channel.id}/p${thread.ts.replace('.', '')}`,
               platform: 'slack',
               raw_text: `[#${channel.name}] Thread:\n${text}`,
-              title: (thread.text ?? `Thread in #${channel.name}`).slice(0, 80),
+              title: (firstHuman.text ?? `Thread in #${channel.name}`).slice(0, 80),
               ...(author ? { author } : {}),
             });
           } catch {

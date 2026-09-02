@@ -21,7 +21,7 @@ describe('SlackFetcher', () => {
       if (url.includes('conversations.history'))
         return Promise.resolve(ok({ ok: true, messages: [{ ts: '111.222', text: 'decide?', reply_count: 3, user: 'U1' }] }));
       if (url.includes('conversations.replies'))
-        return Promise.resolve(ok({ ok: true, messages: [{ ts: '111.222', text: 'we decided X', user: 'U1' }] }));
+        return Promise.resolve(ok({ ok: true, messages: [{ ts: '111.222', text: 'decide?', user: 'U1' }] }));
       if (url.includes('users.info'))
         return Promise.resolve(ok({ ok: true, user: { name: 'ada', real_name: 'Ada L', profile: { email: 'ada@x.io' } } }));
       return Promise.resolve(ok({ ok: true }));

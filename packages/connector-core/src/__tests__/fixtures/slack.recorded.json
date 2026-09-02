@@ -326,23 +326,14 @@
       }
     },
     {
-      "source_url": "https://slack.com/archives/C1/p1712400000000200",
-      "platform": "slack",
-      "raw_text": "[#eng] Thread:\nThis message was deleted.\nConversation Analysis :white_check_mark: 1 decision created\nConflict detected: this contradicts \"Keep RabbitMQ\" (0.82)",
-      "title": "This message was deleted.",
-      "author": {
-        "name": "Slackbot",
-        "handle": "slackbot"
-      }
-    },
-    {
       "source_url": "https://slack.com/archives/C2/p1712700000000500",
       "platform": "slack",
       "raw_text": "[#ops] Thread:\nThis message was deleted.\nWe are going with Postgres for the ledger.\nConversation Analysis :white_check_mark: 1 decision created",
-      "title": "This message was deleted.",
+      "title": "We are going with Postgres for the ledger.",
       "author": {
-        "name": "Slackbot",
-        "handle": "slackbot"
+        "name": "Grace H",
+        "handle": "grace",
+        "email": "grace@x.io"
       }
     }
   ]
