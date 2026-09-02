@@ -119,6 +119,20 @@ jobs:
       - name: Build
         run: pnpm -r run build
 
+      # THROWAWAY, remove once the OIDC mystery below is resolved. pnpm's
+      # publish silently skips OIDC with zero log output when ci-info's
+      # GITHUB_ACTIONS check is false (verified from pnpm's own source:
+      # pnpm11/releasing/commands/src/publish/oidc/idToken.ts) - every OTHER
+      # failure path prints "Skipped OIDC: ..." first, and our run printed
+      # nothing. This checks PRESENCE only, never the value - both are live
+      # bearer credentials for minting further tokens.
+      - name: OIDC diagnostic (throwaway)
+        continue-on-error: true
+        run: |
+          echo "GITHUB_ACTIONS=$GITHUB_ACTIONS"
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL is set: $([ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && echo yes || echo no)"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN is set: $([ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ] && echo yes || echo no)"
+
       - name: Publish (connector-core before connector-server; topo-ordered)
         run: pnpm -r publish --access public --no-git-checks --provenance
         env:
