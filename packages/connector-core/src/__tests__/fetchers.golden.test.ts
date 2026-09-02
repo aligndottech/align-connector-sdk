@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
+import { routeResponses } from './helpers/routedFetch.js';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../index.js';
 import {
   ConfluenceFetcher,
@@ -56,44 +57,6 @@ function loadFixture(platform: string): RecordedFixture {
   return JSON.parse(readFileSync(fixturePath(platform), 'utf8')) as RecordedFixture;
 }
 
-/**
- * Serve recorded responses from the mocked `fetch`.
- *
- * A key is one or more ` & `-separated substrings that must ALL appear in the
- * request (the URL, a newline, then the body). The most specific key wins:
- * most parts first, then the longest key, so `conversations.list & cursor=P2`
- * beats `conversations.list` for the second page and `/teams/T1/channels/CH1/messages`
- * beats `/teams/T1/channels`. Order in the JSON file never matters.
- *
- * A request nothing anticipated throws AND is collected, so the test can name
- * it. Throwing alone is not enough: several fetchers swallow a failed lookup
- * (a Slack `users.info`, a Notion block read) and would quietly produce an
- * item with less in it.
- */
-function serveRecorded(responses: Record<string, unknown>): { unmatched: string[] } {
-  const unmatched: string[] = [];
-  const rules = Object.entries(responses).map(([key, body]) => ({ key, parts: key.split(' & '), body }));
-  mockFetch.mockImplementation((async (input: unknown, init?: { body?: unknown }) => {
-    const haystack = `${String(input)}\n${typeof init?.body === 'string' ? init.body : ''}`;
-    const hits = rules
-      .filter((r) => r.parts.every((p) => haystack.includes(p)))
-      .sort((a, b) => b.parts.length - a.parts.length || b.key.length - a.key.length);
-    const hit = hits[0];
-    if (!hit) {
-      unmatched.push(String(input));
-      throw new Error(`golden fixture has no response for ${String(input)}`);
-    }
-    const body = hit.body;
-    return {
-      ok: true,
-      status: 200,
-      json: async () => body,
-      text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
-    };
-  }) as never);
-  return { unmatched };
-}
-
 function stripCreatedAt(item: FetcherItem): Record<string, unknown> {
   return Object.fromEntries(Object.entries(item).filter(([k]) => k !== 'created_at'));
 }
@@ -125,7 +88,7 @@ describe.each(GOLDEN_CASES)('$platform golden fixture', ({ platform, build, opts
 
   it('produces the recorded items, byte for byte, ignoring created_at', async () => {
     const fixture = loadFixture(platform);
-    const { unmatched } = serveRecorded(fixture.responses);
+    const { unmatched } = routeResponses(mockFetch, fixture.responses);
 
     const items = await build().fetch(opts);
     const stripped = items.map(stripCreatedAt);

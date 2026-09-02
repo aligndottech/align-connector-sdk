@@ -5,6 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
+import { routeResponses } from './helpers/routedFetch.js';
 import { toIsoOrUndefined } from '../fetchers/util/time.js';
 import { ConfluenceFetcher } from '../fetchers/confluence.js';
 import { GitFetcher } from '../fetchers/git.js';
@@ -18,26 +19,10 @@ import { TeamsFetcher } from '../fetchers/teams.js';
 import { ZoomFetcher } from '../fetchers/zoom.js';
 import type { FetcherItem } from '../index.js';
 
+const route = (responses: Record<string, unknown>) => routeResponses(mockFetch, responses).calls;
+
 vi.mock('undici', () => ({ fetch: vi.fn() }));
 const mockFetch = vi.mocked(fetch);
-
-/** Route requests by ` & `-separated substrings of URL + body; most specific key wins. */
-function route(responses: Record<string, unknown>): Array<{ url: string; body: string }> {
-  const calls: Array<{ url: string; body: string }> = [];
-  const rules = Object.entries(responses).map(([key, body]) => ({ key, parts: key.split(' & '), body }));
-  mockFetch.mockImplementation((async (input: unknown, init?: { body?: unknown }) => {
-    const body = typeof init?.body === 'string' ? init.body : '';
-    calls.push({ url: String(input), body });
-    const haystack = `${String(input)}\n${body}`;
-    const hit = rules
-      .filter((r) => r.parts.every((p) => haystack.includes(p)))
-      .sort((a, b) => b.parts.length - a.parts.length || b.key.length - a.key.length)[0];
-    if (!hit) throw new Error(`no response routed for ${String(input)}`);
-    const b = hit.body;
-    return { ok: true, status: 200, json: async () => b, text: async () => (typeof b === 'string' ? b : JSON.stringify(b)) };
-  }) as never);
-  return calls;
-}
 
 describe('toIsoOrUndefined', () => {
   it.each([

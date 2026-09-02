@@ -1,5 +1,5 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 
 interface GitLabMergeRequest {
@@ -10,12 +10,21 @@ interface GitLabMergeRequest {
   created_at?: string;
 }
 
+// GitLab's own per-page maximum. Before ALI-828 the read was one page of at
+// most 50, a cap nobody had chosen, whatever the caller asked for.
+const GITLAB_PAGE_MAX = 100;
+
 /**
- * Read-only personal GitLab fetcher: the caller's merged merge requests.
+ * Read-only personal GitLab fetcher: the caller's merged merge requests, paged
+ * by page number up to `limit` (a page shorter than requested is the last).
  * `domain` (default gitlab.com) rides on the options index signature.
  */
 export class GitLabFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const domain = (opts.domain as string | undefined) ?? 'gitlab.com';
     const base = `https://${domain}/api/v4`;
     const headers = { Authorization: `Bearer ${opts.token}` };
@@ -28,14 +37,24 @@ export class GitLabFetcher implements ConnectorFetcher {
 
     const limit = opts.limit ?? 100;
     const items: FetcherItem[] = [];
+    let scanned = 0;
+    let pagesUnreadable = 0;
 
-    const mrRes = await fetch(
-      `${base}/merge_requests?author_id=${user.id}&state=merged&per_page=${Math.min(limit, 50)}&order_by=updated_at`,
-      { headers },
-    );
-    if (mrRes.ok) {
+    for (let page = 1; items.length < limit; page++) {
+      const perPage = Math.min(limit - items.length, GITLAB_PAGE_MAX);
+      const mrRes = await fetch(
+        `${base}/merge_requests?author_id=${user.id}&state=merged&per_page=${perPage}&page=${page}&order_by=updated_at`,
+        { headers },
+      );
+      if (!mrRes.ok) {
+        // Before ALI-828 this returned nothing and said nothing.
+        pagesUnreadable += 1;
+        break;
+      }
       const mrs = (await mrRes.json()) as GitLabMergeRequest[];
+      scanned += mrs.length;
       for (const mr of mrs) {
+        if (items.length >= limit) break;
         const createdAt = toIsoOrUndefined(mr.created_at);
         items.push({
           source_url: mr.web_url,
@@ -45,8 +64,11 @@ export class GitLabFetcher implements ConnectorFetcher {
           ...(createdAt ? { created_at: createdAt } : {}),
         });
       }
+      if (mrs.length < perPage) break; // last page
     }
 
-    return items.slice(0, limit);
+    const skips: FetchSkip[] = [];
+    if (pagesUnreadable > 0) skips.push({ kind: 'error', count: pagesUnreadable, detail: 'merge request pages the token could not read' });
+    return { items, report: { platform: 'gitlab', scanned, requested: limit, skips } };
   }
 }

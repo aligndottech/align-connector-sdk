@@ -118,3 +118,134 @@ describe('ZoomFetcher', () => {
     expect(items).toEqual([]);
   });
 });
+
+describe('ZoomFetcher pagination and report (ALI-828)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const meeting = (n: number) => ({
+    uuid: `m${n}==`,
+    id: n,
+    topic: `Meeting ${n}`,
+    start_time: '2026-01-15T10:00:00Z',
+    recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url: `https://zoom.us/dl/${n}` }],
+  });
+  const meetings = (from: number, count: number) => Array.from({ length: count }, (_, i) => meeting(from + i));
+  const serveZoom = (pages: Record<string, unknown>) => {
+    const calls: string[] = [];
+    mockFetch.mockImplementation((async (input: unknown) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes('/dl/')) return text('WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nwe decided\n');
+      const token = new URL(url).searchParams.get('next_page_token') ?? '';
+      return ok(pages[token]);
+    }) as never);
+    return calls;
+  };
+  const recordingCalls = (calls: string[]) => calls.filter((u) => u.includes('/users/me/recordings'));
+
+  it('pages with next_page_token until the requested limit is reached', async () => {
+    // R18a: limit 50 from two pages of 30; the second request carries the token and asks for only what is left.
+    const calls = serveZoom({ '': { meetings: meetings(1, 30), next_page_token: 'Z2' }, Z2: { meetings: meetings(31, 30), next_page_token: '' } });
+    const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 50 });
+    expect(items).toHaveLength(50);
+    const rec = recordingCalls(calls);
+    expect(rec).toHaveLength(2);
+    expect(rec[0]).toContain('page_size=30');
+    expect(rec[0]).not.toContain('next_page_token');
+    expect(rec[1]).toContain('next_page_token=Z2');
+    expect(rec[1]).toContain('page_size=20');
+    expect(report).toMatchObject({ platform: 'zoom', requested: 50, scanned: 50, skips: [] });
+  });
+
+  it('asks for exactly the limit when it is under a page, and makes one request', async () => {
+    // R18b: never over-fetch a fixed 30.
+    const calls = serveZoom({ '': { meetings: meetings(1, 10), next_page_token: 'Z2' } });
+    const items = await new ZoomFetcher().fetch({ token: 'tok', limit: 10 });
+    expect(items).toHaveLength(10);
+    const rec = recordingCalls(calls);
+    expect(rec).toHaveLength(1);
+    expect(rec[0]).toContain('page_size=10');
+  });
+
+  it('reports meetings without a completed transcript, and transcripts it could not download', async () => {
+    mockFetch.mockImplementation((async (input: unknown) => {
+      const url = String(input);
+      if (url.includes('/dl/ok')) return text('WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nfine\n');
+      if (url.includes('/dl/broken')) return { ok: false, status: 404, text: async () => '' } as unknown as Awaited<ReturnType<typeof fetch>>;
+      return ok({
+        meetings: [
+          { uuid: 'a', id: 1, topic: 'ok', start_time: '2026-01-01T00:00:00Z', recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url: 'https://zoom.us/dl/ok' }] },
+          { uuid: 'b', id: 2, topic: 'no transcript', start_time: '2026-01-01T00:00:00Z', recording_files: [{ file_type: 'MP4', status: 'completed', download_url: 'https://zoom.us/dl/mp4' }] },
+          { uuid: 'c', id: 3, topic: 'broken', start_time: '2026-01-01T00:00:00Z', recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url: 'https://zoom.us/dl/broken' }] },
+        ],
+        next_page_token: '',
+      });
+    }) as never);
+    const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 50 });
+    expect(items.map((i) => i.title)).toEqual(['ok (2026-01-01)']);
+    expect(report.scanned).toBe(3);
+    expect(report.skips).toEqual([
+      { kind: 'shape', count: 1, detail: expect.stringContaining('transcript') },
+      { kind: 'error', count: 1, detail: expect.stringContaining('transcript') },
+    ]);
+  });
+});
+
+describe('NotionFetcher pagination and report (ALI-828)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const page = (n: number) => ({ id: `p${n}`, url: `https://notion.so/p${n}`, properties: { title: { title: [{ plain_text: `Page ${n}` }] } } });
+  const pages = (from: number, count: number) => Array.from({ length: count }, (_, i) => page(from + i));
+  const serveNotion = (searchPages: Record<string, unknown>, blocks: (id: string) => unknown = () => ({ results: [] })) => {
+    const searches: Array<Record<string, unknown>> = [];
+    mockFetch.mockImplementation((async (input: unknown, init?: { body?: string }) => {
+      const url = String(input);
+      if (url.endsWith('/v1/search')) {
+        const body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>;
+        searches.push(body);
+        return ok(searchPages[String(body.start_cursor ?? '')]);
+      }
+      if (url.includes('/blocks/')) {
+        const id = url.split('/blocks/')[1].split('/')[0];
+        const b = blocks(id);
+        return b === 'throw' ? ({ ok: false, status: 500, json: async () => ({}) } as unknown as Awaited<ReturnType<typeof fetch>>) : ok(b);
+      }
+      return ok({});
+    }) as never);
+    return searches;
+  };
+
+  it('follows next_cursor while has_more, carrying start_cursor in the next request body', async () => {
+    // R20a
+    const searches = serveNotion({
+      '': { results: pages(1, 50), has_more: true, next_cursor: 'N2' },
+      N2: { results: pages(51, 50), has_more: false, next_cursor: null },
+    });
+    const { items, report } = await new NotionFetcher().fetchWithReport({ token: 'tok', limit: 100 });
+    expect(items).toHaveLength(100);
+    expect(searches).toHaveLength(2);
+    expect(searches[0]).toMatchObject({ page_size: 100 });
+    expect(searches[0]).not.toHaveProperty('start_cursor');
+    expect(searches[1]).toMatchObject({ start_cursor: 'N2', page_size: 50 });
+    expect(report).toMatchObject({ platform: 'notion', requested: 100, scanned: 100, skips: [] });
+  });
+
+  it('makes no second search when has_more is false', async () => {
+    // R20b
+    const searches = serveNotion({ '': { results: pages(1, 3), has_more: false, next_cursor: null } });
+    const items = await new NotionFetcher().fetch({ token: 'tok', limit: 100 });
+    expect(items).toHaveLength(3);
+    expect(searches).toHaveLength(1);
+  });
+
+  it('reports pages whose body could not be read (kept, title only)', async () => {
+    serveNotion({ '': { results: pages(1, 2), has_more: false } }, (id) => (id === 'p2' ? 'throw' : { results: [] }));
+    const { items, report } = await new NotionFetcher().fetchWithReport({ token: 'tok', limit: 10 });
+    expect(items).toHaveLength(2);
+    expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringContaining('body') }]);
+  });
+});

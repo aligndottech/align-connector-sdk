@@ -1,5 +1,5 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 
 interface GitHubSearchItem {
@@ -204,6 +204,10 @@ async function buildIssueItem(issue: GitHubSearchItem, headers: Record<string, s
  */
 export class GitHubFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const headers = {
       Authorization: `Bearer ${opts.token}`,
       Accept: 'application/vnd.github+json',
@@ -232,8 +236,9 @@ export class GitHubFetcher implements ConnectorFetcher {
 
     const rows = interleave([...prByUrl.values()], issues, limit);
 
-    return mapWithConcurrency(rows, PARALLEL_DISCUSSION_FETCHES, (r) =>
+    const items = await mapWithConcurrency(rows, PARALLEL_DISCUSSION_FETCHES, (r) =>
       r.kind === 'pr' ? buildPrItem(r.row, headers) : buildIssueItem(r.row, headers),
     );
+    return { items, report: { platform: 'github', scanned: rows.length, requested: limit, skips: [] } };
   }
 }

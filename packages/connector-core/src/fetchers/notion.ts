@@ -1,5 +1,5 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 
 interface NotionPage {
@@ -18,6 +18,10 @@ interface NotionBlock {
   type: string;
   [key: string]: unknown;
 }
+
+// Notion's own per-page maximum for /v1/search. Before ALI-828 the read was one
+// page sized to the limit, with the cursor Notion returned never sent back.
+const NOTION_PAGE_MAX = 100;
 
 /** Resolve a Notion user id to a name (cached). Degrades to undefined on failure. */
 function makeNotionUserResolver(headers: Record<string, string>) {
@@ -58,55 +62,79 @@ function extractBlockText(block: NotionBlock): string {
 /**
  * Read-only personal Notion fetcher: pages the integration can see, with body
  * text from their child blocks. Author = the page creator ("who to talk to").
+ * Pages the search with `start_cursor` while `has_more`, up to `limit`. A page
+ * whose blocks cannot be read is kept (title only) and counted into the report.
  */
 export class NotionFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const headers = {
       Authorization: `Bearer ${opts.token}`,
       'Notion-Version': '2022-06-28',
       'Content-Type': 'application/json',
     };
     const limit = opts.limit ?? 50;
-
-    const searchRes = await fetch('https://api.notion.com/v1/search', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ filter: { value: 'page', property: 'object' }, page_size: limit }),
-    });
-    if (!searchRes.ok) {
-      throw new Error(`Notion API failed (${searchRes.status}). Check your integration token.`);
-    }
-    const data = (await searchRes.json()) as { results: NotionPage[] };
-
     const resolveUser = makeNotionUserResolver(headers);
     const items: FetcherItem[] = [];
-    for (const page of data.results) {
-      const title = extractPageTitle(page);
-      const pageUrl = page.url ?? `https://notion.so/${page.id.replace(/-/g, '')}`;
-      const author = await resolveUser(page.created_by?.id);
-      const createdAt = toIsoOrUndefined(page.created_time);
+    let scanned = 0;
+    let bodiesUnreadable = 0;
+    let cursor: string | undefined;
 
-      let bodyText = '';
-      try {
-        const blocksRes = await fetch(`https://api.notion.com/v1/blocks/${page.id}/children?page_size=50`, { headers });
-        if (blocksRes.ok) {
-          const blocks = (await blocksRes.json()) as { results: NotionBlock[] };
-          bodyText = blocks.results.map(extractBlockText).filter(Boolean).join('\n');
-        }
-      } catch {
-        /* skip block fetch errors */
-      }
-
-      items.push({
-        source_url: pageUrl,
-        platform: 'notion',
-        raw_text: [title, bodyText].filter(Boolean).join('\n\n').slice(0, 3000),
-        title,
-        ...(createdAt ? { created_at: createdAt } : {}),
-        ...(author ? { author } : {}),
+    do {
+      const searchRes = await fetch('https://api.notion.com/v1/search', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          filter: { value: 'page', property: 'object' },
+          page_size: Math.min(limit - items.length, NOTION_PAGE_MAX),
+          ...(cursor ? { start_cursor: cursor } : {}),
+        }),
       });
-    }
+      if (!searchRes.ok) {
+        throw new Error(`Notion API failed (${searchRes.status}). Check your integration token.`);
+      }
+      const data = (await searchRes.json()) as { results: NotionPage[]; has_more?: boolean; next_cursor?: string | null };
 
-    return items;
+      for (const page of data.results) {
+        if (items.length >= limit) break;
+        scanned += 1;
+        const title = extractPageTitle(page);
+        const pageUrl = page.url ?? `https://notion.so/${page.id.replace(/-/g, '')}`;
+        const author = await resolveUser(page.created_by?.id);
+        const createdAt = toIsoOrUndefined(page.created_time);
+
+        let bodyText = '';
+        try {
+          const blocksRes = await fetch(`https://api.notion.com/v1/blocks/${page.id}/children?page_size=50`, { headers });
+          if (blocksRes.ok) {
+            const blocks = (await blocksRes.json()) as { results: NotionBlock[] };
+            bodyText = blocks.results.map(extractBlockText).filter(Boolean).join('\n');
+          } else {
+            bodiesUnreadable += 1;
+          }
+        } catch {
+          bodiesUnreadable += 1;
+        }
+
+        items.push({
+          source_url: pageUrl,
+          platform: 'notion',
+          raw_text: [title, bodyText].filter(Boolean).join('\n\n').slice(0, 3000),
+          title,
+          ...(createdAt ? { created_at: createdAt } : {}),
+          ...(author ? { author } : {}),
+        });
+      }
+      cursor = data.has_more ? (data.next_cursor ?? undefined) : undefined;
+    } while (cursor && items.length < limit);
+
+    const skips: FetchSkip[] = [];
+    if (bodiesUnreadable > 0) {
+      skips.push({ kind: 'error', count: bodiesUnreadable, detail: 'pages whose body could not be read (kept, title only)' });
+    }
+    return { items, report: { platform: 'notion', scanned, requested: limit, skips } };
   }
 }

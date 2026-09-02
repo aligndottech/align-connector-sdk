@@ -43,3 +43,46 @@ describe('GitLabFetcher', () => {
     await expect(new GitLabFetcher().fetch({ token: 'bad' })).rejects.toThrow(/GitLab auth failed \(403\)/);
   });
 });
+
+describe('GitLabFetcher pagination and report (ALI-828)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const mr = (n: number) => ({ web_url: `https://gitlab.com/g/p/-/merge_requests/${n}`, title: `MR ${n}`, description: '', state: 'merged' });
+  const mrs = (from: number, count: number) => Array.from({ length: count }, (_, i) => mr(from + i));
+  const mrCalls = () => mockFetch.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('merge_requests'));
+
+  it('pages by page number until the requested limit is reached', async () => {
+    // R19a: GitLab's own max is 100 per page; 250 needs three requests and the last asks only for the remainder.
+    mockFetch
+      .mockResolvedValueOnce(json({ id: 42 }))
+      .mockResolvedValueOnce(json(mrs(1, 100)))
+      .mockResolvedValueOnce(json(mrs(101, 100)))
+      .mockResolvedValueOnce(json(mrs(201, 50)));
+    const { items, report } = await new GitLabFetcher().fetchWithReport({ token: 'tok', limit: 250 });
+    expect(items).toHaveLength(250);
+    const calls = mrCalls();
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain('per_page=100&page=1');
+    expect(calls[1]).toContain('per_page=100&page=2');
+    expect(calls[2]).toContain('per_page=50&page=3');
+    expect(report).toMatchObject({ platform: 'gitlab', requested: 250, scanned: 250, skips: [] });
+  });
+
+  it('stops after a page shorter than per_page', async () => {
+    // R19b
+    mockFetch.mockResolvedValueOnce(json({ id: 42 })).mockResolvedValueOnce(json(mrs(1, 40)));
+    const { items, report } = await new GitLabFetcher().fetchWithReport({ token: 'tok', limit: 250 });
+    expect(items).toHaveLength(40);
+    expect(mrCalls()).toHaveLength(1);
+    expect(report).toMatchObject({ platform: 'gitlab', requested: 250, scanned: 40 });
+  });
+
+  it('reports a merge-request page the token could not read instead of returning nothing silently', async () => {
+    mockFetch.mockResolvedValueOnce(json({ id: 42 })).mockResolvedValueOnce(json({ message: '403 Forbidden' }, false, 403));
+    const { items, report } = await new GitLabFetcher().fetchWithReport({ token: 'tok', limit: 50 });
+    expect(items).toEqual([]);
+    expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringContaining('merge request') }]);
+  });
+});

@@ -1,5 +1,5 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 
 const LINEAR_GQL = 'https://api.linear.app/graphql';
@@ -64,6 +64,10 @@ async function fetchConnection(token: string, field: LinearConnection, target: n
  */
 export class LinearFetcher implements ConnectorFetcher {
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+    return (await this.fetchWithReport(opts)).items;
+  }
+
+  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const limit = opts.limit ?? 50;
     const [assigned, created] = await Promise.all([
       fetchConnection(opts.token, 'assignedIssues', limit),
@@ -72,10 +76,12 @@ export class LinearFetcher implements ConnectorFetcher {
 
     const seen = new Set<string>();
     const items: FetcherItem[] = [];
+    let scanned = 0;
     for (const issue of [...assigned, ...created]) {
       if (items.length >= limit) break;
       if (seen.has(issue.id)) continue;
       seen.add(issue.id);
+      scanned += 1;
       const createdAt = toIsoOrUndefined(issue.createdAt);
       const comments = (issue.comments?.nodes ?? [])
         .map((c) => `${c.user?.name ?? 'Unknown'}: ${c.body}`)
@@ -100,6 +106,6 @@ export class LinearFetcher implements ConnectorFetcher {
       });
     }
 
-    return items;
+    return { items, report: { platform: 'linear', scanned, requested: limit, skips: [] } };
   }
 }
