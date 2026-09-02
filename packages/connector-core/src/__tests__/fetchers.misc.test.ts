@@ -186,6 +186,29 @@ describe('ZoomFetcher pagination and report (ALI-828)', () => {
     expect(windows).toEqual(['2026-03-02..2026-03-31', '2026-01-31..2026-03-01', '2026-01-01..2026-01-30']);
   });
 
+  it('reads the single-meeting uuid path, which returns one meeting object rather than a list', async () => {
+    // /meetings/{id}/recordings answers with the meeting itself: recording_files at the top
+    // level and no meetings array. Reading meetings[] there returned nothing, always, since
+    // the uuid option was added. Named by a fresh-context review of ALI-828.
+    mockFetch.mockImplementation((async (input: unknown) => {
+      const url = String(input);
+      if (url.includes('/dl/')) return text('WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nwe decided\n');
+      return ok({
+        uuid: 'abc==',
+        id: 1,
+        topic: 'Planning',
+        start_time: '2026-01-15T10:00:00Z',
+        host_email: 'lead@x.io',
+        recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url: 'https://zoom.us/dl/1' }],
+      });
+    }) as never);
+    const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'tok', uuid: 'abc==' });
+    expect(mockFetch.mock.calls.map((c) => String(c[0]))[0]).toBe('https://api.zoom.us/v2/meetings/abc%3D%3D/recordings');
+    expect(items.map((i) => i.title)).toEqual(['Planning (2026-01-15)']);
+    expect(report.scanned).toBe(1);
+    expect(recordingCalls(mockFetch.mock.calls.map((c) => String(c[0])))).toHaveLength(0); // no window listing on the uuid path
+  });
+
   it('stops opening older windows once the limit is reached', async () => {
     const calls = serveZoom({ '': { meetings: meetings(1, 5), next_page_token: '' } });
     const { items } = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 5, daysBack: 90 });
