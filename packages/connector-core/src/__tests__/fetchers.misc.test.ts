@@ -51,6 +51,40 @@ describe('LinearFetcher', () => {
     expect(items[0].raw_text).toContain('Bob: lean kafka');
   });
 
+  it('names Linear\'s own error on a non-OK status instead of guessing the cause', async () => {
+    // A 400 from Linear is a rejected REQUEST (a bad token is 401). The old message
+    // said "check your personal API token" for every non-OK status, which sent a
+    // user chasing a token that was fine (2026-09-03, first live Linear import).
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: async () => ({ errors: [{ message: 'Variable "$first" got invalid value "100"; Int cannot represent non-integer value' }] }),
+      text: async () => '',
+    } as unknown as Awaited<ReturnType<typeof fetch>>);
+    await expect(new LinearFetcher().fetch({ token: 't' })).rejects.toThrow(/Linear API failed \(400\): Variable "\$first" got invalid value/);
+  });
+
+  it('still points at the token when Linear says the request was not authenticated', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ errors: [{ message: 'Authentication required, not authenticated', extensions: { code: 'AUTHENTICATION_ERROR' } }] }),
+      text: async () => '',
+    } as unknown as Awaited<ReturnType<typeof fetch>>);
+    await expect(new LinearFetcher().fetch({ token: 't' })).rejects.toThrow(/Linear API failed \(401\): Authentication required.*personal API token/);
+  });
+
+  it('asks for at most 20 comments per issue, so a 100-issue page stays under the complexity limit', async () => {
+    // Linear scores a query by nodes requested: 100 issues x 50 comments (the default) is
+    // over its 10,000-point single-query limit, and Linear reports that as a bare 400.
+    const noMore = { hasNextPage: false, endCursor: null };
+    mockFetch.mockResolvedValue(ok({ data: { viewer: { assignedIssues: { nodes: [], pageInfo: noMore }, createdIssues: { nodes: [], pageInfo: noMore } } } }));
+    await new LinearFetcher().fetch({ token: 't', limit: 100 });
+    const body = JSON.parse(String(mockFetch.mock.calls[0][1]?.body));
+    expect(body.query).toContain('comments(first: 20)');
+    expect(body.variables.first).toBe(100);
+  });
+
   it('surfaces GraphQL errors', async () => {
     mockFetch.mockResolvedValue(ok({ errors: [{ message: 'bad token' }], data: null }));
     await expect(new LinearFetcher().fetch({ token: 'bad' })).rejects.toThrow(/bad token/);
