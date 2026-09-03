@@ -8,11 +8,24 @@ const LINEAR_PAGE_MAX = 100;
 
 /**
  * Comments per issue. Linear scores a query by the nodes it asks for and rejects a
- * single query over 10,000 points with a bare HTTP 400: a page of 100 issues carrying
- * the connection's default of 50 comments each is over that, and that is the shape
- * of the first live Linear import on 2026-09-03. 20 keeps the page well under.
+ * single query over 10,000 points; a page of 100 issues carrying the connection's
+ * default of 50 comments each would be over that. 20 keeps the page well under.
+ * (An earlier version of this comment blamed the first live import's 400 on this
+ * limit; Linear's own message showed it was the Authorization header, see below.)
  */
 const LINEAR_COMMENTS_MAX = 20;
+
+/**
+ * Linear takes a personal API key bare and an OAuth access token with `Bearer`, and
+ * refuses the other way round with HTTP 400: "It looks like you're trying to use an
+ * API key as a Bearer token. Remove the Bearer prefix from the Authorization header."
+ * That was the first live local-mode Linear import, 2026-09-03; the CLI's local mode
+ * pastes API keys, so Linear had never worked there. Keys are prefixed `lin_api_`,
+ * OAuth tokens `lin_oauth_`.
+ */
+function authorizationFor(token: string): string {
+  return token.startsWith('lin_api_') ? token : `Bearer ${token}`;
+}
 
 const ISSUE_FIELDS = `
   id title description url createdAt
@@ -50,7 +63,7 @@ async function fetchConnection(token: string, field: LinearConnection, target: n
     }`;
     const res = await fetch(LINEAR_GQL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: authorizationFor(token), 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables: { first: Math.min(target - out.length, LINEAR_PAGE_MAX), after } }),
     });
     // Linear answers a bad or missing key with 401 and a refused REQUEST (invalid query,
