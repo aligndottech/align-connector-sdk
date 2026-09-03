@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { providerError } from './errors.js';
 
 interface GitLabMergeRequest {
   web_url: string;
@@ -31,7 +32,7 @@ export class GitLabFetcher implements ConnectorFetcher {
 
     const userRes = await fetch(`${base}/user`, { headers });
     if (!userRes.ok) {
-      throw new Error(`GitLab auth failed (${userRes.status}). Check your token has 'read_api' scope.`);
+      throw await providerError('GitLab', userRes, { forbidden: 'Check the token has the read_api scope.' });
     }
     const user = (await userRes.json()) as { id: number };
 

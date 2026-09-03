@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { FetcherAuthError } from './errors.js';
 
 async function slackGet(
   endpoint: string,
@@ -12,9 +13,17 @@ async function slackGet(
     headers: { Authorization: `Bearer ${token}` },
   });
   const data = (await res.json()) as Record<string, unknown>;
-  if (!data.ok) throw new Error(`Slack API error on ${endpoint}: ${data.error as string}`);
+  if (!data.ok) {
+    // Slack answers HTTP 200 with ok:false and an error code; these codes are its 401.
+    const code = String(data.error);
+    if (SLACK_AUTH_ERRORS.has(code)) throw new FetcherAuthError('Slack', code);
+    throw new Error(`Slack API error on ${endpoint}: ${code}`);
+  }
   return data;
 }
+
+/** Slack's error codes that mean the token itself was refused (its documented auth family). */
+const SLACK_AUTH_ERRORS = new Set(['invalid_auth', 'not_authed', 'token_revoked', 'token_expired', 'account_inactive']);
 
 interface SlackMessage {
   ts: string;

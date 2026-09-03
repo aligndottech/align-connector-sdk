@@ -45,6 +45,9 @@ export {
   buildCommitUrl,
   formatCommitAsText,
   FetcherAuthError,
+  providerError,
+  providerErrorText,
+  type RefusedResponse,
   type GitCommitSource,
   type GitCommit,
 } from './fetchers/index.js';

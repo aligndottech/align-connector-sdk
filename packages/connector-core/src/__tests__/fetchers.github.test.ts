@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import { GitHubFetcher } from '../fetchers/github.js';
+import { FetcherAuthError } from '../fetchers/errors.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
 const mockFetch = vi.mocked(fetch);
@@ -394,7 +395,26 @@ describe('GitHubFetcher', () => {
 
     it('throws a helpful error when auth fails', async () => {
       mockFetch.mockResolvedValueOnce(json(null, false, 401));
-      await expect(new GitHubFetcher().fetch({ token: 'bad' })).rejects.toThrow(/GitHub auth failed \(401\)/);
+      await expect(new GitHubFetcher().fetch({ token: 'bad' })).rejects.toThrow(/GitHub authentication failed \(401\)/);
     });
   });
 });
+
+describe('GitHubFetcher says what GitHub said on a refused request (2026-09-03 rule)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('401 is a typed FetcherAuthError carrying GitHub\'s message', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ message: 'Bad credentials' }), text: async () => '{"message":"Bad credentials"}' } as never);
+    const err = await new GitHubFetcher().fetch({ token: 'bad' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/GitHub authentication failed \(401\): Bad credentials/);
+  });
+
+  it('a 500 names the status and the body and does not mention the token', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({ message: 'Server Error' }), text: async () => '{"message":"Server Error"}' } as never);
+    await expect(new GitHubFetcher().fetch({ token: 'ok' })).rejects.toThrow(/^GitHub API failed \(500\): Server Error\.$/);
+  });
+});
+

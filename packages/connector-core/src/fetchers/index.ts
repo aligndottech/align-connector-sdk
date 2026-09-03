@@ -20,7 +20,7 @@ export { LinearFetcher } from './linear.js';
 export { NotionFetcher } from './notion.js';
 export { GitFetcher, type GitCommitSource, type GitCommit } from './git.js';
 export { buildCommitUrl, formatCommitAsText } from './util/git.js';
-export { FetcherAuthError } from './errors.js';
+export { FetcherAuthError, providerError, providerErrorText, type RefusedResponse } from './errors.js';
 
 /**
  * Registry of token-based read-only fetchers, keyed by platform. The CLI and the

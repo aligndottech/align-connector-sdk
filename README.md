@@ -45,6 +45,13 @@ A `FetcherItem` carries `source_url`, `platform`, `raw_text`, an optional `title
 `created_at` (ISO-8601 Z) taken from **the tool's own timestamp**. Leave `created_at` out when the tool did not say;
 never substitute the fetch time, because a plausible wrong date is indistinguishable from a measurement downstream.
 
+**On a refused request, throw what the provider said.** Use `providerError(connector, res, { forbidden })`
+from connector-core: a 401 becomes a typed `FetcherAuthError` carrying the provider's message (the CLI offers a
+reconnect and forgets a saved token that is dead), any other status becomes `<Connector> API failed (<status>):
+<provider text>`, and a scope hint is added only on 403. Never write "check your token" for a status that does
+not mean the token was refused: a 400 is the provider rejecting the request, and pointing at the key sends the
+user the wrong way.
+
 This single implementation serves both the **free CLI** (calls `fetch()` for personal imports, and `fetchWithReport()`
 when present, to print what each import fetched and skipped) and the **paid discover scan** (calls your `fetch_historical`
 tool, backed by the same fetcher).

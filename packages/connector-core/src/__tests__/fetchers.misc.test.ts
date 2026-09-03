@@ -3,6 +3,7 @@ import { fetch } from 'undici';
 import { LinearFetcher } from '../fetchers/linear.js';
 import { NotionFetcher } from '../fetchers/notion.js';
 import { ZoomFetcher } from '../fetchers/zoom.js';
+import { FetcherAuthError } from '../fetchers/errors.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
 const mockFetch = vi.mocked(fetch);
@@ -61,7 +62,7 @@ describe('LinearFetcher', () => {
       json: async () => ({ errors: [{ message: 'Variable "$first" got invalid value "100"; Int cannot represent non-integer value' }] }),
       text: async () => '',
     } as unknown as Awaited<ReturnType<typeof fetch>>);
-    await expect(new LinearFetcher().fetch({ token: 't' })).rejects.toThrow(/Linear API failed \(400\): Variable "\$first" got invalid value/);
+    await expect(new LinearFetcher().fetch({ token: 't' })).rejects.toThrow(/^Linear API failed \(400\): Variable "\$first" got invalid value/);
   });
 
   it('still points at the token when Linear says the request was not authenticated', async () => {
@@ -71,7 +72,9 @@ describe('LinearFetcher', () => {
       json: async () => ({ errors: [{ message: 'Authentication required, not authenticated', extensions: { code: 'AUTHENTICATION_ERROR' } }] }),
       text: async () => '',
     } as unknown as Awaited<ReturnType<typeof fetch>>);
-    await expect(new LinearFetcher().fetch({ token: 't' })).rejects.toThrow(/Linear API failed \(401\): Authentication required.*personal API token/);
+    const err = await new LinearFetcher().fetch({ token: 't' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Linear authentication failed \(401\): Authentication required.*token/);
   });
 
   it('asks for at most 20 comments per issue, so a 100-issue page stays under the complexity limit', async () => {
@@ -88,6 +91,48 @@ describe('LinearFetcher', () => {
   it('surfaces GraphQL errors', async () => {
     mockFetch.mockResolvedValue(ok({ errors: [{ message: 'bad token' }], data: null }));
     await expect(new LinearFetcher().fetch({ token: 'bad' })).rejects.toThrow(/bad token/);
+  });
+});
+
+describe('NotionFetcher says what Notion said on a refused request (2026-09-03 rule)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+  const refused = (status: number, body: unknown) =>
+    ({ ok: false, status, json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Awaited<ReturnType<typeof fetch>>;
+
+  it('401 is a typed FetcherAuthError carrying Notion\'s message', async () => {
+    mockFetch.mockResolvedValueOnce(refused(401, { object: 'error', code: 'unauthorized', message: 'API token is invalid.' }));
+    const err = await new NotionFetcher().fetch({ token: 'bad' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Notion authentication failed \(401\): API token is invalid\./);
+  });
+
+  it('403 names the body and says to share the pages with the integration; 500 says neither', async () => {
+    mockFetch.mockResolvedValueOnce(refused(403, { object: 'error', code: 'restricted_resource', message: 'Insufficient permissions for this endpoint.' }));
+    await expect(new NotionFetcher().fetch({ token: 't' })).rejects.toThrow(/^Notion API failed \(403\): Insufficient permissions for this endpoint\. .*share/i);
+    mockFetch.mockResolvedValueOnce(refused(500, { object: 'error', code: 'internal_server_error', message: 'Unexpected error.' }));
+    await expect(new NotionFetcher().fetch({ token: 't' })).rejects.toThrow(/^Notion API failed \(500\): Unexpected error\.$/);
+  });
+});
+
+describe('ZoomFetcher says what Zoom said on a refused request (2026-09-03 rule)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+  const refused = (status: number, body: unknown) =>
+    ({ ok: false, status, json: async () => body, text: async () => JSON.stringify(body) }) as unknown as Awaited<ReturnType<typeof fetch>>;
+
+  it('401 is a typed FetcherAuthError carrying Zoom\'s message', async () => {
+    mockFetch.mockResolvedValueOnce(refused(401, { code: 124, message: 'Invalid access token.' }));
+    const err = await new ZoomFetcher().fetch({ token: 'bad', daysBack: 30 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Zoom authentication failed \(401\): Invalid access token\./);
+  });
+
+  it('a 429 names the status and the body and does not mention the token', async () => {
+    mockFetch.mockResolvedValueOnce(refused(429, { code: 429, message: 'You have exceeded the daily rate limit.' }));
+    await expect(new ZoomFetcher().fetch({ token: 't', daysBack: 30 })).rejects.toThrow(/^Zoom API failed \(429\): You have exceeded the daily rate limit\.$/);
   });
 });
 

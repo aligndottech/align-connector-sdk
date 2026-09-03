@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { providerError } from './errors.js';
 
 interface NotionPage {
   id: string;
@@ -94,7 +95,9 @@ export class NotionFetcher implements ConnectorFetcher {
         }),
       });
       if (!searchRes.ok) {
-        throw new Error(`Notion API failed (${searchRes.status}). Check your integration token.`);
+        throw await providerError('Notion', searchRes, {
+          forbidden: 'Share the pages with the integration: Notion lets an integration read only what it has been given.',
+        });
       }
       const data = (await searchRes.json()) as { results: NotionPage[]; has_more?: boolean; next_cursor?: string | null };
 

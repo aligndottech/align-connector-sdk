@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { providerError } from './errors.js';
 
 const LINEAR_GQL = 'https://api.linear.app/graphql';
 const LINEAR_PAGE_MAX = 100;
@@ -21,15 +22,6 @@ const ISSUE_FIELDS = `
   comments(first: ${LINEAR_COMMENTS_MAX}) { nodes { body user { name } } }
 `;
 
-/** Linear's own words for a refused request, or an empty string when it gave none. */
-async function linearErrorText(res: { json(): Promise<unknown> }): Promise<string> {
-  try {
-    const parsed = (await res.json()) as { errors?: Array<{ message?: string }> };
-    return (parsed.errors ?? []).map((e) => e.message).filter(Boolean).join('; ');
-  } catch {
-    return '';
-  }
-}
 
 interface LinearIssueNode {
   id: string;
@@ -61,15 +53,9 @@ async function fetchConnection(token: string, field: LinearConnection, target: n
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables: { first: Math.min(target - out.length, LINEAR_PAGE_MAX), after } }),
     });
-    if (!res.ok) {
-      // Linear answers a bad or missing key with 401 and a refused REQUEST (invalid
-      // query, over the complexity limit) with 400. Say what Linear said, and point
-      // at the token only when the token is what it complained about.
-      const detail = await linearErrorText(res);
-      throw new Error(
-        `Linear API failed (${res.status})${detail ? `: ${detail}` : ''}${res.status === 401 ? '. Check your personal API token.' : ''}`,
-      );
-    }
+    // Linear answers a bad or missing key with 401 and a refused REQUEST (invalid query,
+    // over the complexity limit) with 400; providerError keeps the two apart.
+    if (!res.ok) throw await providerError('Linear', res);
     const json = (await res.json()) as {
       errors?: Array<{ message: string }>;
       data?: { viewer: Record<string, { nodes: LinearIssueNode[]; pageInfo: { hasNextPage: boolean; endCursor: string } }> };

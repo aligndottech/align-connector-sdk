@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { providerError } from './errors.js';
 
 interface GitHubSearchItem {
   html_url: string;
@@ -216,7 +217,7 @@ export class GitHubFetcher implements ConnectorFetcher {
 
     const userRes = await fetch('https://api.github.com/user', { headers });
     if (!userRes.ok) {
-      throw new Error(`GitHub auth failed (${userRes.status}). Check your token has 'repo' scope.`);
+      throw await providerError('GitHub', userRes, { forbidden: 'Check the token has the repo scope, or read access to the repositories.' });
     }
     const user = (await userRes.json()) as { login: string };
 

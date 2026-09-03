@@ -1,6 +1,6 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
-import { FetcherAuthError } from './errors.js';
+import { providerError } from './errors.js';
 import { toIsoOrUndefined } from './util/time.js';
 
 interface JiraIssue {
@@ -71,15 +71,9 @@ export class JiraFetcher implements ConnectorFetcher {
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        if (res.status === 401) throw new FetcherAuthError('Jira');
-        if (res.status === 403) {
-          throw new Error(
-            "Jira access denied (403): the token lacks Jira scopes or access. Re-auth won't help - " +
-              "check the Atlassian app's Jira API permissions.",
-          );
-        }
-        const text = await res.text();
-        throw new Error(`Jira API failed (${res.status}): ${text.slice(0, 200)}`);
+        throw await providerError('Jira', res, {
+          forbidden: "The token lacks Jira scopes or access. Re-auth won't help - check the Atlassian app's Jira API permissions.",
+        });
       }
       const data = (await res.json()) as { issues?: JiraIssue[]; nextPageToken?: string; isLast?: boolean };
       issues.push(...(data.issues ?? []));
