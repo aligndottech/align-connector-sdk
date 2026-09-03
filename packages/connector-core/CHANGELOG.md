@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.6.0...connector-core-v0.6.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* **fetchers:** say what the provider said on a refused request, and point at the token only on 401 ([#30](https://github.com/aligndottech/align-connector-sdk/issues/30)) ([9e58850](https://github.com/aligndottech/align-connector-sdk/commit/9e58850fad4abad9dfeabd08369621bd2cb1f74e))
+
 ## [0.6.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.5.0...connector-core-v0.6.0) (2026-09-02)
 
 
