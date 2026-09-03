@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.6.1...connector-core-v0.6.2) (2026-09-03)
+
+
+### Bug Fixes
+
+* **linear:** send a personal API key bare, Bearer is for OAuth tokens only ([#32](https://github.com/aligndottech/align-connector-sdk/issues/32)) ([bdea925](https://github.com/aligndottech/align-connector-sdk/commit/bdea92521374f6c8ade5faf646e85bb23e74431e))
+
 ## [0.6.1](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.6.0...connector-core-v0.6.1) (2026-09-03)
 
 
