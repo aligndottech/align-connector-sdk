@@ -1,17 +1,27 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { providerError } from './errors.js';
 
 const LINEAR_GQL = 'https://api.linear.app/graphql';
 const LINEAR_PAGE_MAX = 100;
+
+/**
+ * Comments per issue. Linear scores a query by the nodes it asks for and rejects a
+ * single query over 10,000 points with a bare HTTP 400: a page of 100 issues carrying
+ * the connection's default of 50 comments each is over that, and that is the shape
+ * of the first live Linear import on 2026-09-03. 20 keeps the page well under.
+ */
+const LINEAR_COMMENTS_MAX = 20;
 
 const ISSUE_FIELDS = `
   id title description url createdAt
   state { name }
   team { name }
   creator { name email }
-  comments { nodes { body user { name } } }
+  comments(first: ${LINEAR_COMMENTS_MAX}) { nodes { body user { name } } }
 `;
+
 
 interface LinearIssueNode {
   id: string;
@@ -43,7 +53,9 @@ async function fetchConnection(token: string, field: LinearConnection, target: n
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables: { first: Math.min(target - out.length, LINEAR_PAGE_MAX), after } }),
     });
-    if (!res.ok) throw new Error(`Linear API failed (${res.status}). Check your personal API token.`);
+    // Linear answers a bad or missing key with 401 and a refused REQUEST (invalid query,
+    // over the complexity limit) with 400; providerError keeps the two apart.
+    if (!res.ok) throw await providerError('Linear', res);
     const json = (await res.json()) as {
       errors?: Array<{ message: string }>;
       data?: { viewer: Record<string, { nodes: LinearIssueNode[]; pageInfo: { hasNextPage: boolean; endCursor: string } }> };

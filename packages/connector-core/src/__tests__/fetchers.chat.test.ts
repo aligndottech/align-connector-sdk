@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import { SlackFetcher } from '../fetchers/slack.js';
 import { TeamsFetcher } from '../fetchers/teams.js';
+import { FetcherAuthError } from '../fetchers/errors.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
 const mockFetch = vi.mocked(fetch);
@@ -38,9 +39,19 @@ describe('SlackFetcher', () => {
     expect(items[0].raw_text).toContain('[#eng] Thread:');
   });
 
-  it('throws when the Slack API returns ok:false', async () => {
+  it('an auth error code from Slack is a typed FetcherAuthError that still names the code', async () => {
+    // Slack answers HTTP 200 with ok:false; its error code is the status.
     mockFetch.mockResolvedValueOnce(ok({ ok: false, error: 'invalid_auth' }));
-    await expect(new SlackFetcher().fetch({ token: 'bad', interChannelDelayMs: 0 })).rejects.toThrow(/invalid_auth/);
+    const err = await new SlackFetcher().fetch({ token: 'bad', interChannelDelayMs: 0 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Slack authentication failed \(401\): invalid_auth/);
+  });
+
+  it('any other Slack error code is a plain error naming the endpoint and the code', async () => {
+    mockFetch.mockResolvedValueOnce(ok({ ok: false, error: 'ratelimited' }));
+    const err = await new SlackFetcher().fetch({ token: 't', interChannelDelayMs: 0 }).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Slack API error on auth\.test: ratelimited/);
   });
 });
 
@@ -85,5 +96,17 @@ describe('TeamsFetcher', () => {
   it('gives a helpful error when admin consent is missing', async () => {
     mockFetch.mockResolvedValueOnce(bad({ error: { code: 'Authorization_RequestDenied' } }, 403));
     await expect(new TeamsFetcher().fetch({ token: 't' })).rejects.toThrow(/admin consent/);
+  });
+
+  it('401 is a typed FetcherAuthError carrying Graph\'s message', async () => {
+    mockFetch.mockResolvedValueOnce(bad({ error: { code: 'InvalidAuthenticationToken', message: 'Access token has expired.' } }, 401));
+    const err = await new TeamsFetcher().fetch({ token: 'old' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Teams authentication failed \(401\): Access token has expired\./);
+  });
+
+  it('a 503 names the status and Graph\'s message, and does not mention the token', async () => {
+    mockFetch.mockResolvedValueOnce(bad({ error: { code: 'ServiceUnavailable', message: 'Try again later.' } }, 503));
+    await expect(new TeamsFetcher().fetch({ token: 't' })).rejects.toThrow(/^Teams API failed \(503\): Try again later\.$/);
   });
 });

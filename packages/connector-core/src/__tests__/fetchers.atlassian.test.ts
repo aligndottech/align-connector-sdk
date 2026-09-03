@@ -49,11 +49,18 @@ describe('JiraFetcher', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://api.atlassian.com/ex/jira/cid/rest/api/3/search/jql');
   });
 
-  it('throws FetcherAuthError on 401 and a plain error on 403', async () => {
-    mockFetch.mockResolvedValueOnce(res(null, false, 401));
-    await expect(new JiraFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toBeInstanceOf(FetcherAuthError);
-    mockFetch.mockResolvedValueOnce(res(null, false, 403));
-    await expect(new JiraFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toThrow(/access denied \(403\)/);
+  it('throws FetcherAuthError on 401 carrying Jira\'s words, and a plain error on 403 with the scope hint', async () => {
+    mockFetch.mockResolvedValueOnce(res({ errorMessages: ['Client must be authenticated to access this resource.'] }, false, 401));
+    const err = await new JiraFetcher().fetch({ token: 't', cloudId: 'c' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Jira authentication failed \(401\): Client must be authenticated/);
+    mockFetch.mockResolvedValueOnce(res({ errorMessages: ['The app is not installed on this instance.'] }, false, 403));
+    await expect(new JiraFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toThrow(/^Jira API failed \(403\): The app is not installed on this instance\. .*Jira API permissions/);
+  });
+
+  it('a 500 names the status and the body and does not mention the token', async () => {
+    mockFetch.mockResolvedValueOnce(res({ errorMessages: ['Internal server error'] }, false, 500));
+    await expect(new JiraFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toThrow(/^Jira API failed \(500\): Internal server error\.$/);
   });
 
   it('paginates via nextPageToken up to the limit', async () => {
@@ -95,8 +102,17 @@ describe('ConfluenceFetcher', () => {
     expect(items[0].raw_text).toContain('use kafka'); // html stripped
   });
 
-  it('throws FetcherAuthError on 401', async () => {
-    mockFetch.mockResolvedValueOnce(res(null, false, 401));
-    await expect(new ConfluenceFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toBeInstanceOf(FetcherAuthError);
+  it('throws FetcherAuthError on 401 carrying Confluence\'s words', async () => {
+    mockFetch.mockResolvedValueOnce(res({ message: 'Unauthorized; scope does not match' }, false, 401));
+    const err = await new ConfluenceFetcher().fetch({ token: 't', cloudId: 'c' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/Confluence authentication failed \(401\): Unauthorized; scope does not match/);
+  });
+
+  it('403 carries the body and the Confluence permissions hint; 500 carries the body only', async () => {
+    mockFetch.mockResolvedValueOnce(res({ message: 'Current user not permitted to use Confluence' }, false, 403));
+    await expect(new ConfluenceFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toThrow(/^Confluence API failed \(403\): Current user not permitted to use Confluence\. .*Confluence API permissions/);
+    mockFetch.mockResolvedValueOnce(res({ message: 'Something went wrong' }, false, 500));
+    await expect(new ConfluenceFetcher().fetch({ token: 't', cloudId: 'c' })).rejects.toThrow(/^Confluence API failed \(500\): Something went wrong\.$/);
   });
 });

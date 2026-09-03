@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { providerError } from './errors.js';
 
 interface ZoomRecordingFile {
   file_type: string;
@@ -70,10 +71,7 @@ async function zoomGet<T>(path: string, token: string): Promise<T> {
   const res = await fetch(`https://api.zoom.us/v2${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(`Zoom API error ${res.status}: ${err.message ?? 'unknown'}`);
-  }
+  if (!res.ok) throw await providerError('Zoom', res);
   return res.json() as Promise<T>;
 }
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import { GitLabFetcher } from '../fetchers/gitlab.js';
+import { FetcherAuthError } from '../fetchers/errors.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
 const mockFetch = vi.mocked(fetch);
@@ -38,9 +39,21 @@ describe('GitLabFetcher', () => {
     expect(mockFetch.mock.calls[0][0]).toBe('https://gitlab.example.com/api/v4/user');
   });
 
-  it('throws on auth failure', async () => {
-    mockFetch.mockResolvedValueOnce(json(null, false, 403));
-    await expect(new GitLabFetcher().fetch({ token: 'bad' })).rejects.toThrow(/GitLab auth failed \(403\)/);
+  it('a 403 names the status, GitLab\'s message and the read_api scope hint', async () => {
+    mockFetch.mockResolvedValueOnce(json({ message: '403 Forbidden' }, false, 403));
+    await expect(new GitLabFetcher().fetch({ token: 'bad' })).rejects.toThrow(/^GitLab API failed \(403\): 403 Forbidden\. .*read_api/);
+  });
+
+  it('a 401 is a typed FetcherAuthError carrying GitLab\'s message', async () => {
+    mockFetch.mockResolvedValueOnce(json({ message: '401 Unauthorized' }, false, 401));
+    const err = await new GitLabFetcher().fetch({ token: 'bad' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetcherAuthError);
+    expect((err as Error).message).toMatch(/GitLab authentication failed \(401\): 401 Unauthorized/);
+  });
+
+  it('a 500 does not mention the token', async () => {
+    mockFetch.mockResolvedValueOnce(json({ message: 'boom' }, false, 500));
+    await expect(new GitLabFetcher().fetch({ token: 'ok' })).rejects.toThrow(/^GitLab API failed \(500\): boom\.$/);
   });
 });
 

@@ -1,6 +1,6 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
-import { FetcherAuthError } from './errors.js';
+import { providerError } from './errors.js';
 import { toIsoOrUndefined } from './util/time.js';
 
 // Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
@@ -101,16 +101,11 @@ export class ConfluenceFetcher implements ConnectorFetcher {
         (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
       const res = await fetch(url, { headers });
       if (!res.ok) {
-        if (res.status === 401) throw new FetcherAuthError('Confluence');
-        if (res.status === 403) {
-          throw new Error(
-            'Confluence access denied (403): the token lacks Confluence scopes or this site has no Confluence. ' +
-              "Re-auth won't help - check the Atlassian app's Confluence API permissions (or skip Confluence).",
-          );
-        }
-        throw new Error(
-          `Confluence API failed (${res.status}). ${isOAuth ? 'Check your OAuth token.' : 'Check your email, token, and domain.'}`,
-        );
+        throw await providerError('Confluence', res, {
+          forbidden:
+            'The token lacks Confluence scopes or this site has no Confluence. ' +
+            "Re-auth won't help - check the Atlassian app's Confluence API permissions (or skip Confluence).",
+        });
       }
       const data = (await res.json()) as { results?: ConfluencePageV2[]; _links?: { base?: string; next?: string } };
       linkBase = linkBase ?? data._links?.base ?? `${humanBase}/wiki`;

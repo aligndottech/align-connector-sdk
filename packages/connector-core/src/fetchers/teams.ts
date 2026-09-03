@@ -1,6 +1,7 @@
 import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { providerError, refusedBody } from './errors.js';
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -33,8 +34,15 @@ async function graphGet<T>(path: string, token: string): Promise<T> {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
-    const err = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
-    const code = err.error?.code ?? '';
+    // Read the body once: the consent branch needs Graph's error code, and providerError
+    // needs the same bytes for the message.
+    const raw = await refusedBody(res);
+    let code = '';
+    try {
+      code = ((JSON.parse(raw) as { error?: { code?: string } }).error?.code) ?? '';
+    } catch {
+      /* not JSON; no code to read */
+    }
     if (res.status === 403 || code.includes('Authorization') || code.includes('Consent')) {
       throw new Error(
         'Teams requires admin consent for ChannelMessage.Read.All. ' +
@@ -42,7 +50,7 @@ async function graphGet<T>(path: string, token: string): Promise<T> {
           'https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ConsentPoliciesMenuBlade',
       );
     }
-    throw new Error(`Microsoft Graph API error ${res.status} on ${path}: ${err.error?.message ?? 'unknown'}`);
+    throw await providerError('Teams', { status: res.status, text: async () => raw });
   }
   return res.json() as Promise<T>;
 }
