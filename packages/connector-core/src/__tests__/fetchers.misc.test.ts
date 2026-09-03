@@ -88,6 +88,25 @@ describe('LinearFetcher', () => {
     expect(body.variables.first).toBe(100);
   });
 
+  it('sends a personal API key bare, without the Bearer prefix Linear reserves for OAuth tokens', async () => {
+    // Linear's own words on the first live local import (2026-09-03): "It looks like you're
+    // trying to use an API key as a Bearer token. Remove the Bearer prefix." The CLI's local
+    // mode pastes API keys, so Linear had never worked there.
+    const noMore = { hasNextPage: false, endCursor: null };
+    mockFetch.mockResolvedValue(ok({ data: { viewer: { assignedIssues: { nodes: [], pageInfo: noMore }, createdIssues: { nodes: [], pageInfo: noMore } } } }));
+    await new LinearFetcher().fetch({ token: 'lin_api_abc123' });
+    const headers = (mockFetch.mock.calls[0][1] as { headers: Record<string, string> }).headers;
+    expect(headers.Authorization).toBe('lin_api_abc123');
+  });
+
+  it('keeps the Bearer prefix for an OAuth access token', async () => {
+    const noMore = { hasNextPage: false, endCursor: null };
+    mockFetch.mockResolvedValue(ok({ data: { viewer: { assignedIssues: { nodes: [], pageInfo: noMore }, createdIssues: { nodes: [], pageInfo: noMore } } } }));
+    await new LinearFetcher().fetch({ token: 'lin_oauth_xyz789' });
+    const headers = (mockFetch.mock.calls[0][1] as { headers: Record<string, string> }).headers;
+    expect(headers.Authorization).toBe('Bearer lin_oauth_xyz789');
+  });
+
   it('surfaces GraphQL errors', async () => {
     mockFetch.mockResolvedValue(ok({ errors: [{ message: 'bad token' }], data: null }));
     await expect(new LinearFetcher().fetch({ token: 'bad' })).rejects.toThrow(/bad token/);
