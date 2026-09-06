@@ -6,6 +6,9 @@ describe('@aligndottech/connector-server exports', () => {
     expect(typeof server.createConnectorApp).toBe('function');
     expect(typeof server.createMcpHandler).toBe('function');
     expect(server.WebhookGuard).toBeDefined();
+    expect(typeof server.verifyWebhookSecret).toBe('function');
+    expect(typeof server.isWebhookSecretConfigured).toBe('function');
+    expect(typeof server.realtimeHealth).toBe('function');
     expect(server.BaseCredentialResolver).toBeDefined();
     expect(typeof server.createRequestContext).toBe('function');
   });

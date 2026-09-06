@@ -30,6 +30,30 @@ describe('WebhookGuard', () => {
       guard.destroy();
     });
 
+    it('should reject when no secret configured AND failClosed is set', () => {
+      // The default (above) is documented "skip mode" - a reasonable OSS default, and the
+      // wrong one for a caller that wants every unconfigured deployment to reject rather
+      // than accept unverified deliveries. failClosed opts into that instead of changing
+      // the default, so existing consumers relying on skip-mode see no behavior change.
+      const guard = new WebhookGuard({ failClosed: true });
+      expect(guard.verifySignature('payload', 'any')).toBe(false);
+      guard.destroy();
+    });
+
+    it('should still verify a correct signature when failClosed is set and a secret IS configured', () => {
+      const guard = new WebhookGuard({ secret: 'test-secret', failClosed: true });
+      const payload = '{"event":"test"}';
+      const sig = createHmac('sha256', 'test-secret').update(payload).digest('hex');
+      expect(guard.verifySignature(payload, sig)).toBe(true);
+      guard.destroy();
+    });
+
+    it('should still reject a bad signature when failClosed is set and a secret IS configured', () => {
+      const guard = new WebhookGuard({ secret: 'test-secret', failClosed: true });
+      expect(guard.verifySignature('payload', 'wrong-sig')).toBe(false);
+      guard.destroy();
+    });
+
     it('should support custom algorithm', () => {
       const guard = new WebhookGuard({ secret: 'test-secret', algorithm: 'sha1' });
       const payload = 'test';
