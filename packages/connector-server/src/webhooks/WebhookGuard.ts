@@ -9,6 +9,14 @@ export interface WebhookGuardConfig {
   dedupTtlMs?: number;
   /** Max dedup set size before forced clear (prevents memory leaks). Default: 10000 */
   dedupMaxSize?: number;
+  /**
+   * When true, `verifySignature` rejects instead of skipping verification if no secret is
+   * configured. Default false, to keep the existing "skip mode" default backward compatible
+   * for callers relying on it. Set this when an unconfigured secret should never be treated
+   * as "verification not required" - see `verifyWebhookSecret` for the shared-secret
+   * (non-HMAC) equivalent of this same policy.
+   */
+  failClosed?: boolean;
 }
 
 export class WebhookGuard {
@@ -17,11 +25,13 @@ export class WebhookGuard {
   private processedIds = new Set<string>();
   private dedupTimer?: ReturnType<typeof setInterval>;
   private dedupMaxSize: number;
+  private failClosed: boolean;
 
   constructor(config: WebhookGuardConfig) {
     this.secret = config.secret;
     this.algorithm = config.algorithm ?? 'sha256';
     this.dedupMaxSize = config.dedupMaxSize ?? 10000;
+    this.failClosed = config.failClosed ?? false;
 
     const ttl = config.dedupTtlMs ?? 3600000;
     if (ttl > 0) {
@@ -31,7 +41,8 @@ export class WebhookGuard {
   }
 
   /**
-   * Verify HMAC signature. Returns true if no secret is configured (skip mode).
+   * Verify HMAC signature. Returns true if no secret is configured (skip mode), unless
+   * `failClosed` was set in the constructor, in which case an unconfigured secret rejects.
    *
    * Accepts signatures in these formats:
    * - Raw hex: `"abcdef1234..."`
@@ -41,7 +52,7 @@ export class WebhookGuard {
    * The expected digest is always lowercase hex.
    */
   verifySignature(payload: string, signature: string): boolean {
-    if (!this.secret) return true;
+    if (!this.secret) return !this.failClosed;
     try {
       const expected = createHmac(this.algorithm, this.secret).update(payload).digest('hex');
       // Strip optional algorithm/version prefix (e.g., "sha256=", "v0=")

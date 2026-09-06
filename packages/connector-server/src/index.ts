@@ -12,6 +12,12 @@ export { createMcpHandler, type McpHandlerConfig, type McpHandler } from './serv
 
 // Webhooks
 export { WebhookGuard, type WebhookGuardConfig } from './webhooks/WebhookGuard.js';
+export {
+  verifyWebhookSecret,
+  isWebhookSecretConfigured,
+  realtimeHealth,
+  type VerifyWebhookSecretOutcome,
+} from './webhooks/verifyWebhookSecret.js';
 
 // Auth
 export {
