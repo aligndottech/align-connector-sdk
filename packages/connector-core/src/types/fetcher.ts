@@ -56,6 +56,13 @@ export interface ConnectorFetcherOptions {
   since?: string;
   /** ISO-8601 upper bound (exclusive) for the fetch window. */
   until?: string;
+  /**
+   * Narrow a search-driven fetcher (GitHub) to one `owner/repo`. Absent means every repo the
+   * token can see, which is GitHub's own default and this SDK's default until ALI-917 - a
+   * personal token spanning several unrelated repos (different orgs, different languages)
+   * otherwise returns a mixed, undifferentiated result with no way to ask for less.
+   */
+  repo?: string;
   [key: string]: unknown;
 }
 

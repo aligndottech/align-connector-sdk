@@ -179,6 +179,39 @@ describe('GitHubFetcher', () => {
     });
   });
 
+  describe('repo scoping (ALI-917)', () => {
+    it('appends repo: to all three searches when opts.repo is given', async () => {
+      install({ login: 'octocat', search: {} });
+      await new GitHubFetcher().fetch({ token: 't', limit: 10, repo: 'doitintl/kube-no-trouble' });
+
+      const qs = searchQueries();
+      expect(qs).toEqual(
+        expect.arrayContaining([
+          'involves:octocat+type:pr+repo:doitintl/kube-no-trouble',
+          'reviewed-by:octocat+type:pr+repo:doitintl/kube-no-trouble',
+          'involves:octocat+type:issue+repo:doitintl/kube-no-trouble',
+        ]),
+      );
+    });
+
+    it('is unscoped (every repo the token can see) when opts.repo is omitted - unchanged default', async () => {
+      install({ login: 'octocat', search: {} });
+      await new GitHubFetcher().fetch({ token: 't', limit: 10 });
+
+      expect(searchQueries().join(' ')).not.toContain('repo:');
+    });
+
+    it('only returns items GitHub itself scoped to that repo (the search does the filtering, not a client-side pass)', async () => {
+      install({
+        search: {
+          'involves:me+type:pr+repo:o/r': [row({ html_url: 'o/r#1', number: 1, title: 'in scope' })],
+        },
+      });
+      const items = await new GitHubFetcher().fetch({ token: 't', limit: 10, repo: 'o/r' });
+      expect(items.map((i) => i.title)).toEqual(['in scope']);
+    });
+  });
+
   describe('search failures (pre-existing behavior, unchanged by ALI-805)', () => {
     it('returns whatever a search collected before a later page failed, rather than erroring the whole fetch', async () => {
       // searchAll's `if (!res.ok) break` predates this PR and is untouched by
