@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.6.2...connector-server-v0.7.0) (2026-09-07)
+
+
+### Features
+
+* **connector-server:** add fail-closed shared-secret verification ([#34](https://github.com/aligndottech/align-connector-sdk/issues/34)) ([828d447](https://github.com/aligndottech/align-connector-sdk/commit/828d4472e1df2913455c3c33bc2038b1d43be19f))
+
 ## [0.6.2](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.6.1...connector-server-v0.6.2) (2026-09-03)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.6.2...connector-core-v0.7.0) (2026-09-07)
+
+
+### Features
+
+* **connector-core:** scope GitHubFetcher searches to one repo (ALI-917) ([#36](https://github.com/aligndottech/align-connector-sdk/issues/36)) ([0df6d70](https://github.com/aligndottech/align-connector-sdk/commit/0df6d70e2767dada4babd0e255c3c68ada9a5798))
+
 ## [0.6.2](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.6.1...connector-core-v0.6.2) (2026-09-03)
 
 
