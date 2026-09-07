@@ -222,11 +222,15 @@ export class GitHubFetcher implements ConnectorFetcher {
     const user = (await userRes.json()) as { login: string };
 
     const limit = opts.limit ?? 100;
+    // ALI-917: unscoped by default (every repo the token can see, unchanged since ALI-805) -
+    // `opts.repo` narrows to one `owner/repo` via GitHub's own search qualifier, so the
+    // filtering happens server-side rather than fetching everything and discarding client-side.
+    const repoQualifier = opts.repo ? `+repo:${opts.repo}` : '';
 
     const [involvesPrs, reviewedPrs, issues] = await Promise.all([
-      searchAll(`https://api.github.com/search/issues?q=involves:${user.login}+type:pr`, headers, limit),
-      searchAll(`https://api.github.com/search/issues?q=reviewed-by:${user.login}+type:pr`, headers, limit),
-      searchAll(`https://api.github.com/search/issues?q=involves:${user.login}+type:issue`, headers, limit),
+      searchAll(`https://api.github.com/search/issues?q=involves:${user.login}+type:pr${repoQualifier}`, headers, limit),
+      searchAll(`https://api.github.com/search/issues?q=reviewed-by:${user.login}+type:pr${repoQualifier}`, headers, limit),
+      searchAll(`https://api.github.com/search/issues?q=involves:${user.login}+type:issue${repoQualifier}`, headers, limit),
     ]);
 
     // involves: and reviewed-by: can both return the same PR (e.g. you
