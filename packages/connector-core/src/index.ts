@@ -65,6 +65,13 @@ export {
 
 export { UUID_REGEX, isValidUUID, assertValidUUID } from './utils/validation.js';
 
+// A source Align minted a synthetic identity for is not a place anyone can open.
+export {
+  SYNTHETIC_SOURCE_PREFIXES,
+  isSyntheticSource,
+  navigableSourceUrl,
+} from './utils/syntheticSource.js';
+
 // Parsers
 export { CommandParser, CommandHelpText } from './parsers/CommandParser.js';
 
