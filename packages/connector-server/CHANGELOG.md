@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.7.0...connector-server-v0.8.0) (2026-09-09)
+
+
+### Miscellaneous Chores
+
+* **connector-server:** Synchronize align-connector-sdk versions
+
 ## [0.7.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.6.2...connector-server-v0.7.0) (2026-09-07)
 
 
