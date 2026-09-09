@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.8.0...connector-core-v0.9.0) (2026-09-09)
+
+
+### Features
+
+* **connector-core:** allow extra headers through GatewayClient.request() (ALI-691) ([#39](https://github.com/aligndottech/align-connector-sdk/issues/39)) ([6a7dd8f](https://github.com/aligndottech/align-connector-sdk/commit/6a7dd8f4adccbe35c313e4aad9cfd2af4b61a628))
+
 ## [0.8.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.7.0...connector-core-v0.8.0) (2026-09-09)
 
 
