@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.7.0...connector-core-v0.8.0) (2026-09-09)
+
+
+### Features
+
+* **connector-core:** promote isSyntheticSource/navigableSourceUrl from align-stack (ALI-922) ([#37](https://github.com/aligndottech/align-connector-sdk/issues/37)) ([0dce5d8](https://github.com/aligndottech/align-connector-sdk/commit/0dce5d8cd2d24891195a4f24d3cb1b481efb00cf))
+
 ## [0.7.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.6.2...connector-core-v0.7.0) (2026-09-07)
 
 
