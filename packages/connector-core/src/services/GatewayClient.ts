@@ -128,9 +128,16 @@ export class GatewayClient {
       method?: string;
       body?: unknown;
       tenantId?: string;
+      /**
+       * Extra headers a caller wants attached (e.g. x-align-platform, ALI-691). Additive
+       * only: spread first so the headers this method itself resolves below (auth, tenant
+       * scoping, content-type) always win on a key collision, rather than a caller being
+       * able to launder a request past them.
+       */
+      headers?: Record<string, string>;
     } = {}
   ): Promise<T> {
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...options.headers };
 
     if (options.body) {
       headers['content-type'] = 'application/json';
