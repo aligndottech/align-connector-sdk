@@ -30,6 +30,17 @@ describe('Connector OTel Setup', () => {
     expect(result.logger.error).toBeDefined();
     expect(result.logger.warn).toBeDefined();
   });
+
+  it('should wire a RedactingSpanProcessor when enabled, without throwing (ALI-1186)', async () => {
+    // Constructing the SDK with spanProcessors does not itself make a network
+    // call (the OTLP exporter is lazy), so this exercises the enabled: true
+    // wiring path added for the redacting processor without a real export.
+    result = setupConnectorOtel({
+      serviceName: 'align-connector-test',
+      enabled: true,
+    });
+    expect(result.sdk).toBeDefined();
+  });
 });
 
 describe('Structured Logger', () => {
