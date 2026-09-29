@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.9.0...connector-server-v0.9.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* convert createMcpHandler's transports store from Record to Map (ALI-1336) ([#42](https://github.com/aligndottech/align-connector-sdk/issues/42)) ([eca01e3](https://github.com/aligndottech/align-connector-sdk/commit/eca01e3c69aa86dd95807618d501ba129ccb9f0b))
+
 ## [0.9.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.8.0...connector-server-v0.9.0) (2026-09-09)
 
 
