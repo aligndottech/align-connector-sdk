@@ -10,6 +10,7 @@ export const INCOMPLETE_SKIP_KINDS: ReadonlySet<FetchSkip['kind']> = new Set<Fet
   'page_cap',
   'time_budget',
   'vendor_cap',
+  'pending',
   'error',
   'auth',
 ]);
@@ -31,6 +32,10 @@ export interface FetchReportParts {
 /**
  * Assemble a {@link FetchReport}: one writer for `complete`, `highWater` and
  * `oldestReached`, so ten fetchers cannot disagree about what they mean.
+ *
+ * `highWater` and `oldestReached` come ONLY from item `updated_at`. With none, they are
+ * absent, and this function never fills them from `created_at` or the clock: a
+ * consumer must then not advance a watermark (see {@link FetchReport.highWater}).
  */
 export function buildFetchReport(items: FetcherItem[], parts: FetchReportParts): FetchReport {
   const { exhausted, ...rest } = parts;

@@ -5,12 +5,28 @@ import { buildFetchReport } from './util/report.js';
 
 export type { GitCommit } from './util/git.js';
 
+/** A commit read plus what the RAW scan (before any filter) saw. */
+export interface GitCommitHistory {
+  /** The commits kept after any filter the source applies. */
+  commits: GitCommit[];
+  /** Raw commits the scan examined before any filter. */
+  scanned: number;
+  /** True only when the raw scan ended before its limit: there were no older commits. */
+  exhausted: boolean;
+}
+
 /**
  * The git I/O the {@link GitFetcher} needs, injected by the caller (e.g. the CLI
  * wraps `git log` / `git remote` via execa). Keeps connector-core process-free.
  */
 export interface GitCommitSource {
-  getCommitHistory(opts: { limit: number }): Promise<GitCommit[]>;
+  /**
+   * Either the commits alone (the original contract), or the commits plus what the raw
+   * scan saw. Return the second form: a source that filters after `git log -n limit`
+   * keeps far fewer commits than it scanned, so only the source can say whether history
+   * ran out. A bare array is read as "cannot say", and the report is not complete.
+   */
+  getCommitHistory(opts: { limit: number }): Promise<GitCommit[] | GitCommitHistory>;
   getRemoteUrl(): Promise<string | null | undefined>;
 }
 
@@ -27,7 +43,10 @@ export class GitFetcher implements ConnectorFetcher {
 
   async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const limit = opts.limit ?? 100;
-    const commits = await this.source.getCommitHistory({ limit });
+    const history = await this.source.getCommitHistory({ limit });
+    const { commits, scanned, exhausted } = Array.isArray(history)
+      ? { commits: history, scanned: history.length, exhausted: false }
+      : history;
     const remoteUrl = await this.source.getRemoteUrl();
     const items = commits.map((c) => {
       const url = buildCommitUrl(remoteUrl, c.sha);
@@ -41,17 +60,17 @@ export class GitFetcher implements ConnectorFetcher {
         ...(c.author ? { author: { name: c.author } } : {}),
       } satisfies FetcherItem;
     });
-    // The source returns at most `limit` commits, so a full batch may have more behind it.
-    // Scope is 'team': local history holds every author's commits.
+    // Only the source knows whether its raw scan was cut: a filtered list shorter than
+    // `limit` is normal and proves nothing. Scope is 'team': history holds every author.
     return {
       items,
       report: buildFetchReport(items, {
         platform: 'git',
-        scanned: commits.length,
+        scanned,
         requested: limit,
         skips: [],
         scope: 'team',
-        exhausted: commits.length < limit,
+        exhausted,
       }),
     };
   }

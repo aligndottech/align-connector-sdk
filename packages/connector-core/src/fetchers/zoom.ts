@@ -98,6 +98,7 @@ export class ZoomFetcher implements ConnectorFetcher {
     const seen = new Set<string>();
     let scanned = 0;
     let noTranscript = 0;
+    let transcriptPending = 0;
     let unreadable = 0;
     // The item limit leaving a window, a page or a meeting unread.
     let cutByLimit = false;
@@ -128,11 +129,13 @@ export class ZoomFetcher implements ConnectorFetcher {
         if (seen.has(meeting.uuid)) continue;
         seen.add(meeting.uuid);
         scanned += 1;
-        const vttFile = (meeting.recording_files ?? []).find(
-          (f) => f.file_type === 'TRANSCRIPT' && f.status === 'completed',
-        );
+        const transcripts = (meeting.recording_files ?? []).filter((f) => f.file_type === 'TRANSCRIPT');
+        const vttFile = transcripts.find((f) => f.status === 'completed');
         if (!vttFile) {
-          noTranscript += 1;
+          // A transcript file that is not completed yet (processing) will exist on a later
+          // read, so it is unread, not set aside; only a meeting with no transcript is shape.
+          if (transcripts.length > 0) transcriptPending += 1;
+          else noTranscript += 1;
           continue;
         }
 
@@ -172,7 +175,10 @@ export class ZoomFetcher implements ConnectorFetcher {
     }
 
     const skips: FetchSkip[] = [];
-    if (noTranscript > 0) skips.push({ kind: 'shape', count: noTranscript, detail: 'meetings with no completed transcript' });
+    if (noTranscript > 0) skips.push({ kind: 'shape', count: noTranscript, detail: 'meetings with no transcript' });
+    if (transcriptPending > 0) {
+      skips.push({ kind: 'pending', count: transcriptPending, detail: 'meetings whose transcript is not ready yet (Zoom is still processing it)' });
+    }
     if (unreadable > 0) skips.push({ kind: 'error', count: unreadable, detail: 'transcripts that could not be downloaded' });
     return {
       items,

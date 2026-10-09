@@ -208,6 +208,11 @@ export class SlackFetcher implements ConnectorFetcher {
     const maxReplyPages = (opts.maxReplyPages as number | undefined) ?? SLACK_MAX_REPLY_PAGES;
     const timeBudgetMs = (opts.timeBudgetMs as number | undefined) ?? SLACK_TIME_BUDGET_MS;
     const startedAt = Date.now();
+    // KNOWN GAP: `oldest` bounds conversations.history by the thread ROOT's ts, so a
+    // reply added today to a thread whose root is older than the window is never seen,
+    // and a thread already captured never picks up its later replies. A `complete: true`
+    // here means "every root in the window was read", not "every reply". The planned
+    // fix is a `hotThreads` option that re-reads named threads' replies (plan phase S3).
     const oldest = String(Math.floor(startedAt / 1000) - daysBack * 86400);
 
     await slackGet('auth.test', opts.token);

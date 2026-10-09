@@ -93,10 +93,18 @@ describe('buildFetchReport: complete', () => {
   });
 });
 
+/**
+ * Models align-cli's real writer: `git log -n limit` scans n raw commits, then the
+ * decision filters keep only some (here every other one), and the source says whether
+ * the raw scan ran out before its limit.
+ */
 const gitSource = (n: number) => ({
-  // Honours the limit the way the CLI's `git log -n` source does.
-  getCommitHistory: async ({ limit }: { limit: number }) =>
-    Array.from({ length: Math.min(n, limit) }, (_, i) => ({ sha: `abc${i}`, subject: `Adopt ${i}`, date: '2026-01-01T00:00:00Z' })),
+  getCommitHistory: async ({ limit }: { limit: number }) => {
+    const scanned = Math.min(n, limit);
+    const commits = Array.from({ length: scanned }, (_, i) => ({ sha: `abc${i}`, subject: `Adopt ${i}`, date: '2026-01-01T00:00:00Z' }))
+      .filter((_, i) => i % 2 === 0);
+    return { commits, scanned, exhausted: scanned < limit };
+  },
   getRemoteUrl: async () => null,
 });
 

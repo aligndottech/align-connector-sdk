@@ -53,6 +53,7 @@ export {
   providerErrorText,
   type RefusedResponse,
   type GitCommitSource,
+  type GitCommitHistory,
   type GitCommit,
 } from './fetchers/index.js';
 

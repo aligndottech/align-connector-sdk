@@ -346,6 +346,26 @@ describe('ZoomFetcher pagination and report (ALI-828)', () => {
       { kind: 'error', count: 1, detail: expect.stringContaining('transcript') },
     ]);
   });
+  it('a transcript still processing is pending (unread, so not complete); no transcript file at all is shape', async () => {
+    const serveMeetings = (meetings: unknown[]) =>
+      mockFetch.mockImplementation((async (input: unknown) => {
+        const url = String(input);
+        if (url.includes('/dl/ok')) return text('WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nfine\n');
+        return ok({ meetings, next_page_token: '' });
+      }) as never);
+    const done = { uuid: 'a', id: 1, topic: 'ok', start_time: '2026-01-01T00:00:00Z', recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url: 'https://zoom.us/dl/ok' }] };
+
+    serveMeetings([done, { uuid: 'p', id: 2, topic: 'later', start_time: '2026-01-02T00:00:00Z', recording_files: [{ file_type: 'TRANSCRIPT', status: 'processing', download_url: 'https://zoom.us/dl/p' }] }]);
+    const pending = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 50 });
+    expect(pending.report.skips).toEqual([{ kind: 'pending', count: 1, detail: expect.stringContaining('not ready') }]);
+    expect(pending.report.complete).toBe(false);
+
+    mockFetch.mockReset();
+    serveMeetings([done, { uuid: 'n', id: 3, topic: 'video only', start_time: '2026-01-02T00:00:00Z', recording_files: [{ file_type: 'MP4', status: 'completed', download_url: 'https://zoom.us/dl/mp4' }] }]);
+    const none = await new ZoomFetcher().fetchWithReport({ token: 'tok', limit: 50 });
+    expect(none.report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringContaining('no transcript') }]);
+    expect(none.report.complete).toBe(true);
+  });
 });
 
 describe('NotionFetcher pagination and report (ALI-828)', () => {

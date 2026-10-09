@@ -18,7 +18,7 @@ export { TeamsFetcher } from './teams.js';
 export { ZoomFetcher } from './zoom.js';
 export { LinearFetcher } from './linear.js';
 export { NotionFetcher } from './notion.js';
-export { GitFetcher, type GitCommitSource, type GitCommit } from './git.js';
+export { GitFetcher, type GitCommitSource, type GitCommitHistory, type GitCommit } from './git.js';
 export { buildCommitUrl, formatCommitAsText } from './util/git.js';
 export { FetcherAuthError, providerError, providerErrorText, type RefusedResponse } from './errors.js';
 
