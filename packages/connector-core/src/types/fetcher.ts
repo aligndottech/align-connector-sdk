@@ -38,6 +38,24 @@ export interface FetcherItem {
    * measurement downstream.
    */
   created_at?: string;
+  /**
+   * The source's own last-updated time for this item, ISO-8601 Z. It feeds
+   * {@link FetchReport.highWater}, the watermark an incremental sync resumes from,
+   * so the same rule as `created_at` holds: absent when the source did not say,
+   * never the fetch time. As of this version NO built-in fetcher sets it yet.
+   */
+  updated_at?: string;
+  /**
+   * `normaliseSourceKey(platform, source_url)`, for sources where one URL names
+   * exactly one item (a PR, issue, MR, page, Slack thread, Teams message, Zoom meeting,
+   * git commit). A consumer keys an upsert on it, so an edited title updates one row
+   * instead of adding a second. Absent where several items can share a URL, and
+   * wherever normaliseSourceKey returns undefined (a synthetic or fallback URL).
+   *
+   * As of this version NO built-in fetcher sets it (the per-fetcher work lands next).
+   * A consumer that wants a key today calls normaliseSourceKey on `source_url` itself.
+   */
+  source_key?: string;
 }
 
 /**
@@ -63,6 +81,12 @@ export interface ConnectorFetcherOptions {
    * otherwise returns a mixed, undifferentiated result with no way to ask for less.
    */
   repo?: string;
+  /**
+   * Wall-clock budget for the whole read, in milliseconds. A fetcher that stops
+   * because it ran out reports a `time_budget` skip, so the report says the read
+   * is incomplete rather than looking thin.
+   */
+  timeBudgetMs?: number;
   [key: string]: unknown;
 }
 
@@ -82,9 +106,17 @@ export interface FetcherPage {
  */
 export interface FetchSkip {
   /** page_cap: a page or item cap fired; time_budget: the fetcher's own deadline
-   *  fired; shape: the source object was not the kind this fetcher reads; error:
-   *  the provider refused or failed the read. */
-  kind: 'page_cap' | 'time_budget' | 'shape' | 'error';
+   *  fired; vendor_cap: the provider's own ceiling stopped the read (GitHub search
+   *  returns at most 1,000 results); shape: the source object was not the kind this
+   *  fetcher reads; pending: the provider has the object but it is not ready yet (a
+   *  Zoom transcript still processing), so a later read will find it; error: the
+   *  provider refused or failed the read; auth: the provider refused the token for
+   *  part of the read.
+   *
+   *  Every kind except `shape` means something was left UNREAD, so the report is
+   *  not `complete` (see {@link INCOMPLETE_SKIP_KINDS}). The union grows over time:
+   *  a consumer switching on it needs a default branch. */
+  kind: 'page_cap' | 'time_budget' | 'vendor_cap' | 'shape' | 'pending' | 'error' | 'auth';
   count: number;
   detail: string;
 }
@@ -105,6 +137,33 @@ export interface FetchReport {
    * other. Do not reconcile `scanned - skips = items`.
    */
   skips: FetchSkip[];
+  /**
+   * The latest `updated_at` among the returned items: where the next incremental
+   * read resumes. Absent when no item carried one, never `now()`, because a
+   * watermark set to the fetch time skips whatever the source had not yet shown.
+   *
+   * A consumer MUST NOT advance a watermark when this is absent, even on
+   * `complete: true`, and MUST NOT substitute `now()`, `created_at` or the newest
+   * item's position for it. `created_at` is not an updated time: an old item edited
+   * today would sit below a watermark built from it and never be re-read. As of this
+   * version no built-in fetcher sets `updated_at`, so this is always absent and no
+   * built-in fetch can advance a watermark yet.
+   */
+  highWater?: string;
+  /** The earliest `updated_at` among the returned items. Absent like `highWater`. */
+  oldestReached?: string;
+  /**
+   * True only when the read reached the end of what it was asked for: no cap, time
+   * budget, vendor ceiling, error or auth skip fired, and the source said there was
+   * nothing more. A sync advances its watermark only on `true` AND a present
+   * {@link highWater}, so a fetcher that cannot tell says `false`: a false `false`
+   * costs one re-read, a false `true` loses items for good. `complete` alone is not a
+   * watermark: it says the read was whole, not how far it reached.
+   */
+  complete: boolean;
+  /** 'yours': only the caller's own items (authored, assigned, involved). 'team':
+   *  everything the token can read, other people's items included. */
+  scope: 'yours' | 'team';
 }
 
 export interface FetchResult {

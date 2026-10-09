@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError, refusedBody } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -75,19 +76,33 @@ export class TeamsFetcher implements ConnectorFetcher {
     const teams = await graphGet<{ value: TeamsTeam[] }>('/me/joinedTeams', opts.token);
     const items: FetcherItem[] = [];
     let scanned = 0;
+    // Not complete when anything was left unread: the limit stopped the loop, a channel
+    // had more than the one page read ($top=10, no paging yet), or a channel refused.
+    // None of these is a skip line yet (S3 adds them); `complete` must not wait for that.
+    let unread = false;
 
     for (const team of teams.value) {
-      if (items.length >= limit) break;
+      if (items.length >= limit) {
+        unread = true;
+        break;
+      }
       const channels = await graphGet<{ value: TeamsChannel[] }>(`/teams/${team.id}/channels`, opts.token);
       for (const channel of channels.value) {
-        if (items.length >= limit) break;
+        if (items.length >= limit) {
+          unread = true;
+          break;
+        }
         try {
-          const msgs = await graphGet<{ value: TeamsMessage[] }>(
+          const msgs = await graphGet<{ value: TeamsMessage[]; '@odata.nextLink'?: string }>(
             `/teams/${team.id}/channels/${channel.id}/messages?$top=10`,
             opts.token,
           );
+          if (msgs['@odata.nextLink']) unread = true;
           for (const msg of msgs.value) {
-            if (items.length >= limit) break;
+            if (items.length >= limit) {
+              unread = true;
+              break;
+            }
             scanned += 1;
             const mainText = extractText(msg.body);
             const replyTexts = (msg.replies ?? []).map((r) => extractText(r.body)).filter(Boolean);
@@ -113,10 +128,14 @@ export class TeamsFetcher implements ConnectorFetcher {
           }
         } catch {
           /* skip inaccessible channels */
+          unread = true;
         }
       }
     }
 
-    return { items, report: { platform: 'teams', scanned, requested: limit, skips: [] } };
+    return {
+      items,
+      report: buildFetchReport(items, { platform: 'teams', scanned, requested: limit, skips: [], scope: 'team', exhausted: !unread }),
+    };
   }
 }

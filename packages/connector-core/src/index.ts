@@ -28,6 +28,10 @@ export type {
   DecisionAuthor,
 } from './types/fetcher.js';
 
+// Report contract helpers and the cross-surface item identity (one table, one function).
+export { buildFetchReport, INCOMPLETE_SKIP_KINDS, type FetchReportParts } from './fetchers/util/report.js';
+export { normaliseSourceKey } from './sourceKey.js';
+
 // Canonical read-only fetchers (one implementation per provider, shared by the
 // CLI personal import and the paid discover scan).
 export {
@@ -49,6 +53,7 @@ export {
   providerErrorText,
   type RefusedResponse,
   type GitCommitSource,
+  type GitCommitHistory,
   type GitCommit,
 } from './fetchers/index.js';
 

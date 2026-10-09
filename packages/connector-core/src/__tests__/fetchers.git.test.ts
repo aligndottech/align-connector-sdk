@@ -53,3 +53,42 @@ describe('git url + text helpers', () => {
     expect(full).toContain('URL: http://u');
   });
 });
+
+describe('GitFetcher completeness (a false complete:true lets a sync watermark skip commits forever)', () => {
+  /**
+   * Models align-cli's real writer, getCommitHistoryDetailed: `git log -n limit` scans
+   * RAW commits, THEN the decision filters drop most of them. So a short kept list is
+   * normal and says nothing about whether history ran out; only the raw scan can.
+   */
+  const realWriter = (rawInHistory: number, keepEvery = 2): GitCommitSource => ({
+    async getCommitHistory({ limit }) {
+      const scanned = Math.min(rawInHistory, limit);
+      const commits = Array.from({ length: scanned }, (_, i) => ({ sha: `s${i}`, subject: `Adopt ${i}` })).filter(
+        (_, i) => i % keepEvery === 0,
+      );
+      return { commits, scanned, exhausted: scanned < limit };
+    },
+    getRemoteUrl: async () => null,
+  });
+
+  it('is NOT complete when the raw scan hit its limit, even though fewer commits than the limit survived the filter', async () => {
+    const { items, report } = await new GitFetcher(realWriter(40)).fetchWithReport({ token: '', limit: 10 });
+    expect(items.length).toBeLessThan(10); // the old `commits.length < limit` test would say "exhausted"
+    expect(report.scanned).toBe(10); // raw commits examined, not kept ones
+    expect(report.complete).toBe(false);
+  });
+
+  it('is complete when the raw scan ended before its limit: the history ran out', async () => {
+    const { items, report } = await new GitFetcher(realWriter(3)).fetchWithReport({ token: '', limit: 10 });
+    expect(items).toHaveLength(2);
+    expect(report.scanned).toBe(3);
+    expect(report.complete).toBe(true);
+  });
+
+  it('is NOT complete when the source returns a bare array, because it cannot say whether its scan was cut', async () => {
+    const legacy: GitCommitSource = { getCommitHistory: async () => [{ sha: 'a', subject: 'Adopt x' }], getRemoteUrl: async () => null };
+    const { report } = await new GitFetcher(legacy).fetchWithReport({ token: '', limit: 50 });
+    expect(report.scanned).toBe(1);
+    expect(report.complete).toBe(false);
+  });
+});

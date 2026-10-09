@@ -47,7 +47,7 @@ describe.each(EVERY_FETCHER)('$platform fetch report', ({ platform, build, opts 
     const sentinel: FetcherItem[] = [{ source_url: 'https://example.test/1', platform, raw_text: 'x' }];
     const spy = vi.spyOn(fetcher as Required<ConnectorFetcher>, 'fetchWithReport').mockResolvedValue({
       items: sentinel,
-      report: { platform, scanned: 1, skips: [] },
+      report: { platform, scanned: 1, skips: [], complete: true, scope: 'yours' },
     });
     const items = await fetcher.fetch(opts);
     expect(spy).toHaveBeenCalledWith(opts);

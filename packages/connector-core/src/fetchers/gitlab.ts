@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 interface GitLabMergeRequest {
   web_url: string;
@@ -40,6 +41,7 @@ export class GitLabFetcher implements ConnectorFetcher {
     const items: FetcherItem[] = [];
     let scanned = 0;
     let pagesUnreadable = 0;
+    let exhausted = false;
 
     // Constant for the whole run: `page` is an offset in units of per_page, so
     // shrinking per_page on a later page moves the window backwards and re-reads
@@ -68,11 +70,15 @@ export class GitLabFetcher implements ConnectorFetcher {
           ...(createdAt ? { created_at: createdAt } : {}),
         });
       }
-      if (mrs.length < perPage) break; // last page
+      if (mrs.length < perPage) {
+        // The last page, unless the limit left one of its rows unread.
+        exhausted = items.length === scanned;
+        break;
+      }
     }
 
     const skips: FetchSkip[] = [];
     if (pagesUnreadable > 0) skips.push({ kind: 'error', count: pagesUnreadable, detail: 'merge request pages the token could not read' });
-    return { items, report: { platform: 'gitlab', scanned, requested: limit, skips } };
+    return { items, report: buildFetchReport(items, { platform: 'gitlab', scanned, requested: limit, skips, scope: 'yours', exhausted }) };
   }
 }

@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 const LINEAR_GQL = 'https://api.linear.app/graphql';
 const LINEAR_PAGE_MAX = 100;
@@ -51,9 +52,14 @@ interface LinearIssueNode {
 type LinearConnection = 'assignedIssues' | 'createdIssues';
 
 /** Page through one of the viewer's issue connections (assigned / created) up to `target`. */
-async function fetchConnection(token: string, field: LinearConnection, target: number): Promise<LinearIssueNode[]> {
+async function fetchConnection(
+  token: string,
+  field: LinearConnection,
+  target: number,
+): Promise<{ nodes: LinearIssueNode[]; exhausted: boolean }> {
   const out: LinearIssueNode[] = [];
   let after: string | undefined;
+  let exhausted = false;
   while (out.length < target) {
     const query = `query Page($first: Int!, $after: String) {
       viewer { ${field}(first: $first, after: $after, orderBy: updatedAt) {
@@ -77,10 +83,13 @@ async function fetchConnection(token: string, field: LinearConnection, target: n
     const conn = json.data?.viewer?.[field];
     if (!conn) break;
     out.push(...conn.nodes);
-    if (!conn.pageInfo?.hasNextPage) break;
+    if (!conn.pageInfo?.hasNextPage) {
+      exhausted = true;
+      break;
+    }
     after = conn.pageInfo.endCursor;
   }
-  return out;
+  return { nodes: out, exhausted };
 }
 
 /**
@@ -102,8 +111,13 @@ export class LinearFetcher implements ConnectorFetcher {
     const seen = new Set<string>();
     const items: FetcherItem[] = [];
     let scanned = 0;
-    for (const issue of [...assigned, ...created]) {
-      if (items.length >= limit) break;
+    let cutByLimit = false;
+    for (const issue of [...assigned.nodes, ...created.nodes]) {
+      if (items.length >= limit) {
+        // Unread only if it is not a duplicate of one already kept.
+        if (!seen.has(issue.id)) cutByLimit = true;
+        continue;
+      }
       if (seen.has(issue.id)) continue;
       seen.add(issue.id);
       scanned += 1;
@@ -131,6 +145,7 @@ export class LinearFetcher implements ConnectorFetcher {
       });
     }
 
-    return { items, report: { platform: 'linear', scanned, requested: limit, skips: [] } };
+    const exhausted = assigned.exhausted && created.exhausted && !cutByLimit;
+    return { items, report: buildFetchReport(items, { platform: 'linear', scanned, requested: limit, skips: [], scope: 'yours', exhausted }) };
   }
 }

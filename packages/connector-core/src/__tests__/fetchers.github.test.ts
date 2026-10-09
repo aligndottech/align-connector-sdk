@@ -451,3 +451,51 @@ describe('GitHubFetcher says what GitHub said on a refused request (2026-09-03 r
   });
 });
 
+
+describe('GitHubFetcher completeness: vendor ceilings are skips, never a silent complete', () => {
+  beforeEach(() => mockFetch.mockReset());
+  const pr = (i: number) => ({ html_url: `https://github.com/o/r/pull/${i}`, title: `t${i}`, body: '', state: 'open', repository_url: '' });
+
+  /** Serves the involves-PR search from `pages`, every other search empty. */
+  function serve(pages: (page: number) => { items: unknown[]; total_count?: number; incomplete_results?: boolean }) {
+    mockFetch.mockImplementation(async (input: unknown) => {
+      if (input === undefined) return json({});
+      const url = String(input);
+      if (url === 'https://api.github.com/user') return json({ login: 'me' });
+      const q = decodeURIComponent(url.split('q=')[1]!.split('&')[0]!);
+      const page = Number(url.match(/[?&]page=(\d+)/)![1]);
+      if (q !== 'involves:me+type:pr') return json({ items: [], total_count: 0, incomplete_results: false });
+      return json(pages(page));
+    });
+  }
+
+  it('reports a vendor_cap skip and is not complete when a search answers incomplete_results: true', async () => {
+    serve(() => ({ items: [pr(1)], total_count: 1, incomplete_results: true }));
+    const { report } = await new GitHubFetcher().fetchWithReport({ token: 't', limit: 50 });
+    expect(report.skips).toEqual([{ kind: 'vendor_cap', count: 1, detail: expect.stringContaining('incomplete_results') }]);
+    expect(report.complete).toBe(false);
+  });
+
+  it('is complete with no skip when the same search answers incomplete_results: false', async () => {
+    serve(() => ({ items: [pr(1)], total_count: 1, incomplete_results: false }));
+    const { report } = await new GitHubFetcher().fetchWithReport({ token: 't', limit: 50 });
+    expect(report.skips).toEqual([]);
+    expect(report.complete).toBe(true);
+  });
+
+  it('reports the results past the 1,000-result ceiling as a vendor_cap skip and is not complete', async () => {
+    serve((page) => ({ items: Array.from({ length: 100 }, (_, i) => pr((page - 1) * 100 + i)), total_count: 1400 }));
+    const { items, report } = await new GitHubFetcher().fetchWithReport({ token: 't', limit: 1500 });
+    expect(items).toHaveLength(1000);
+    expect(report.skips).toEqual([{ kind: 'vendor_cap', count: 400, detail: expect.stringContaining('1,000') }]);
+    expect(report.complete).toBe(false);
+  });
+
+  it('reports no ceiling skip when the results end before the ceiling', async () => {
+    serve((page) => ({ items: page < 10 ? Array.from({ length: 100 }, (_, i) => pr((page - 1) * 100 + i)) : [pr(999)], total_count: 901 }));
+    const { items, report } = await new GitHubFetcher().fetchWithReport({ token: 't', limit: 1500 });
+    expect(items).toHaveLength(901);
+    expect(report.skips).toEqual([]);
+    expect(report.complete).toBe(true);
+  });
+});

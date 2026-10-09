@@ -19,10 +19,12 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    }
+    },
+    "./source-key-fixtures.json": "./src/__fixtures__/source-key-fixtures.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "src/__fixtures__/source-key-fixtures.json"
   ],
   "engines": {
     "node": ">=20"

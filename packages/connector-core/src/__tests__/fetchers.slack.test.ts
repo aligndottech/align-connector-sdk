@@ -287,6 +287,7 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     expect(items.map((i) => i.title)).toEqual(['A', 'B']);
     expect(channelIds(calls)).toEqual(['C1', 'C2']);
     expect(r.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringContaining('channels not scanned') }]);
+    expect(r.complete).toBe(false);
   });
 
   it('says "or more" when the channel cap fired with list pages still unread', async () => {
@@ -329,6 +330,7 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     const { items, report: r } = await report({ maxChannels: 2 });
     expect(items.map((i) => i.title)).toEqual(['A', 'B']);
     expect(r.skips).toEqual([]);
+    expect(r.complete).toBe(true); // the cap was reached, not exceeded
   });
 
   it('turns threads from every history page into items', async () => {
@@ -427,6 +429,7 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     const { items, report: r } = await report();
     expect(items).toEqual([]);
     expect(r.skips).toEqual([{ kind: 'shape', count: 5, detail: expect.stringContaining('fewer than 2 replies') }]);
+    expect(r.complete).toBe(true); // read and set aside is not unread
   });
 
   it('reports threads with no human message as not imported, by count', async () => {
@@ -455,6 +458,7 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     const { items, report: r } = await report();
     expect(items.map((i) => i.title)).toEqual(['A', 'C']);
     expect(r.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringContaining('channels') }]);
+    expect(r.complete).toBe(false);
   });
 
   it('keeps going when one thread cannot be read, and reports it', async () => {
@@ -489,6 +493,7 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     expect(channelIds(calls)).toEqual(['C1', 'C2', 'C3']);
     expect(items.map((i) => i.title)).toEqual(['T1', 'T2', 'T3']);
     expect(r.skips).toEqual([{ kind: 'time_budget', count: 7, detail: expect.stringContaining('time budget') }]);
+    expect(r.complete).toBe(false);
   });
 
   it('spends the whole budget: a channel starting exactly at the deadline is still read', async () => {

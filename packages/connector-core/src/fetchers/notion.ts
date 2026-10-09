@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 interface NotionPage {
   id: string;
@@ -83,6 +84,7 @@ export class NotionFetcher implements ConnectorFetcher {
     let scanned = 0;
     let bodiesUnreadable = 0;
     let cursor: string | undefined;
+    let cutByLimit = false;
 
     do {
       const searchRes = await fetch('https://api.notion.com/v1/search', {
@@ -102,7 +104,10 @@ export class NotionFetcher implements ConnectorFetcher {
       const data = (await searchRes.json()) as { results: NotionPage[]; has_more?: boolean; next_cursor?: string | null };
 
       for (const page of data.results) {
-        if (items.length >= limit) break;
+        if (items.length >= limit) {
+          cutByLimit = true;
+          break;
+        }
         scanned += 1;
         const title = extractPageTitle(page);
         const pageUrl = page.url ?? `https://notion.so/${page.id.replace(/-/g, '')}`;
@@ -138,6 +143,8 @@ export class NotionFetcher implements ConnectorFetcher {
     if (bodiesUnreadable > 0) {
       skips.push({ kind: 'error', count: bodiesUnreadable, detail: 'pages whose body could not be read (kept, title only)' });
     }
-    return { items, report: { platform: 'notion', scanned, requested: limit, skips } };
+    // No cursor left and no result the limit skipped: the search was read to its end.
+    const exhausted = cursor === undefined && !cutByLimit;
+    return { items, report: buildFetchReport(items, { platform: 'notion', scanned, requested: limit, skips, scope: 'team', exhausted }) };
   }
 }

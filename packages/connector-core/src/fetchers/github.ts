@@ -1,7 +1,8 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 interface GitHubSearchItem {
   html_url: string;
@@ -41,20 +42,48 @@ const PARALLEL_DISCUSSION_FETCHES = 5;
 // bot dump, a copy-pasted log) can't blow the whole item's extraction budget.
 const MAX_SECTION_CHARS = 4000;
 
+interface SearchOutcome {
+  rows: GitHubSearchItem[];
+  /** True only when a short page said the results ran out and GitHub called them complete. */
+  exhausted: boolean;
+  /** GitHub answered a page with `incomplete_results: true` (its search timed out). */
+  incomplete: boolean;
+  /** Results the 1,000-result ceiling left unread, when it ended the loop; else 0. */
+  pastCeiling: number;
+}
+
 /** Page through a GitHub search query until `target` items are collected (or the
- *  results run out / the 1000-result ceiling is hit). */
-async function searchAll(query: string, headers: Record<string, string>, target: number): Promise<GitHubSearchItem[]> {
+ *  results run out / the 1000-result ceiling is hit). A failed page, the target, the
+ *  ceiling or an `incomplete_results` answer all leave `exhausted` false. */
+async function searchAll(query: string, headers: Record<string, string>, target: number): Promise<SearchOutcome> {
   const out: GitHubSearchItem[] = [];
-  for (let page = 1; out.length < target && page <= GH_SEARCH_MAX_PAGES; page++) {
+  let exhausted = false;
+  let incomplete = false;
+  let lastFull = false;
+  let totalCount: number | undefined;
+  let page = 1;
+  for (; out.length < target && page <= GH_SEARCH_MAX_PAGES; page++) {
     const perPage = Math.min(target - out.length, GH_PER_PAGE_MAX);
     const res = await fetch(`${query}&sort=updated&per_page=${perPage}&page=${page}`, { headers });
-    if (!res.ok) break;
-    const data = (await res.json()) as { items?: GitHubSearchItem[] };
+    if (!res.ok) {
+      lastFull = false;
+      break;
+    }
+    const data = (await res.json()) as { items?: GitHubSearchItem[]; total_count?: number; incomplete_results?: boolean };
+    if (data.incomplete_results === true) incomplete = true;
+    if (typeof data.total_count === 'number') totalCount = data.total_count;
     const batch = data.items ?? [];
     out.push(...batch);
-    if (batch.length < perPage) break; // last page
+    lastFull = batch.length >= perPage;
+    if (!lastFull) {
+      exhausted = !incomplete; // last page
+      break;
+    }
   }
-  return out.slice(0, target);
+  // The loop ran out of pages (not of results, not of target) on a full page: the ceiling.
+  const ceilingHit = lastFull && page > GH_SEARCH_MAX_PAGES && out.length < target;
+  const pastCeiling = ceilingHit ? Math.max((totalCount ?? out.length + 1) - out.length, 1) : 0;
+  return { rows: out.slice(0, target), exhausted, incomplete, pastCeiling };
 }
 
 /** Alternate between two ordered lists (PRs, issues) so neither can crowd the
@@ -237,13 +266,32 @@ export class GitHubFetcher implements ConnectorFetcher {
     // authored it AND someone else reviewed you on it too) - dedupe before
     // the item ever reaches the discussion-fetch stage.
     const prByUrl = new Map<string, GitHubSearchItem>();
-    for (const pr of [...involvesPrs, ...reviewedPrs]) prByUrl.set(pr.html_url, pr);
+    for (const pr of [...involvesPrs.rows, ...reviewedPrs.rows]) prByUrl.set(pr.html_url, pr);
 
-    const rows = interleave([...prByUrl.values()], issues, limit);
+    const rows = interleave([...prByUrl.values()], issues.rows, limit);
+    const searches = [involvesPrs, reviewedPrs, issues];
+    const exhausted = searches.every((s) => s.exhausted) && rows.length === prByUrl.size + issues.rows.length;
+    const skips: FetchSkip[] = [];
+    const pastCeiling = searches.reduce((n, s) => n + s.pastCeiling, 0);
+    if (pastCeiling > 0) {
+      skips.push({ kind: 'vendor_cap', count: pastCeiling, detail: "search results past GitHub's 1,000-result search ceiling, not read" });
+    }
+    const incomplete = searches.filter((s) => s.incomplete).length;
+    if (incomplete > 0) {
+      skips.push({
+        kind: 'vendor_cap',
+        count: incomplete,
+        detail: 'searches GitHub answered with incomplete_results (its search timed out, so results may be missing)',
+      });
+    }
 
     const items = await mapWithConcurrency(rows, PARALLEL_DISCUSSION_FETCHES, (r) =>
       r.kind === 'pr' ? buildPrItem(r.row, headers) : buildIssueItem(r.row, headers),
     );
-    return { items, report: { platform: 'github', scanned: rows.length, requested: limit, skips: [] } };
+    // Scope stays 'yours' with `repo`: the queries are still involves:/reviewed-by: the caller.
+    return {
+      items,
+      report: buildFetchReport(items, { platform: 'github', scanned: rows.length, requested: limit, skips, scope: 'yours', exhausted }),
+    };
   }
 }

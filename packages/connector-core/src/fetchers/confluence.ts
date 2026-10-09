@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { providerError } from './errors.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { buildFetchReport } from './util/report.js';
 
 // Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
 const CONFLUENCE_PAGE_MAX = 250;
@@ -93,6 +94,8 @@ export class ConfluenceFetcher implements ConnectorFetcher {
     let scanned = 0;
     let cursor: string | undefined;
     let linkBase: string | undefined;
+    let exhausted = false;
+    let cutByLimit = false;
 
     while (items.length < limit) {
       const pageSize = Math.min(limit - items.length, CONFLUENCE_PAGE_MAX);
@@ -111,7 +114,10 @@ export class ConfluenceFetcher implements ConnectorFetcher {
       linkBase = linkBase ?? data._links?.base ?? `${humanBase}/wiki`;
 
       for (const page of data.results ?? []) {
-        if (items.length >= limit) break;
+        if (items.length >= limit) {
+          cutByLimit = true; // a page the limit left unread
+          break;
+        }
         scanned += 1;
         const bodyHtml = page.body?.storage?.value ?? '';
         const bodyText = stripHtml(bodyHtml).slice(0, 2000);
@@ -130,9 +136,12 @@ export class ConfluenceFetcher implements ConnectorFetcher {
       }
 
       cursor = cursorFromNext(data._links?.next);
-      if (!cursor) break;
+      if (!cursor) {
+        exhausted = !cutByLimit;
+        break;
+      }
     }
 
-    return { items, report: { platform: 'confluence', scanned, requested: limit, skips: [] } };
+    return { items, report: buildFetchReport(items, { platform: 'confluence', scanned, requested: limit, skips: [], scope: 'team', exhausted }) };
   }
 }
