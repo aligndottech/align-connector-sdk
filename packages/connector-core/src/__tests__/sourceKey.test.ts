@@ -7,15 +7,15 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { FETCHERS, normaliseSourceKey } from '../index.js';
+import { FETCHERS, SYNTHETIC_SOURCE_PREFIXES, normaliseSourceKey } from '../index.js';
 
 interface KeyCase {
   platform: string;
   rule: string;
   a: string;
-  b: string;
-  same: boolean;
-  key: string;
+  b?: string;
+  same?: boolean;
+  key: string | null;
   why: string;
 }
 
@@ -36,6 +36,8 @@ describe('source-key fixture table', () => {
     const want = [
       ...PLATFORMS.flatMap((p) => BASE_RULES.map((r) => [p, r] as const)),
       ...SLUG_PLATFORMS.map((p) => [p, 'slug'] as const),
+      ['confluence', 'page_id'] as const,
+      ['slack', 'workspace_host'] as const,
     ];
     for (const [platform, rule] of want) {
       for (const same of [true, false]) {
@@ -45,13 +47,24 @@ describe('source-key fixture table', () => {
     }
     expect(missing).toEqual([]);
     for (const c of TABLE.cases) expect(Object.keys(TABLE.rules)).toContain(c.rule);
+    // The no-key rows cover the Teams fallback and every synthetic prefix, member by member.
+    const noKey = TABLE.cases.filter((c) => c.rule === 'no_key').map((c) => c.a);
+    expect(noKey).toContain('https://teams.microsoft.com');
+    for (const prefix of SYNTHETIC_SOURCE_PREFIXES) expect(noKey.some((a) => a.startsWith(prefix))).toBe(true);
   });
 
-  it.each(TABLE.cases)('$platform $rule: $why', (c) => {
+  const keyed = TABLE.cases.filter((c) => c.rule !== 'no_key');
+  it.each(keyed)('$platform $rule: $why', (c) => {
     const ka = normaliseSourceKey(c.platform, c.a);
-    const kb = normaliseSourceKey(c.platform, c.b);
+    const kb = normaliseSourceKey(c.platform, c.b!);
     expect(ka).toBe(c.key);
+    expect(typeof c.same).toBe('boolean');
     expect(ka === kb).toBe(c.same);
+  });
+
+  it.each(TABLE.cases.filter((c) => c.rule === 'no_key'))('$platform no key: $why', (c) => {
+    expect(c.key).toBeNull();
+    expect(normaliseSourceKey(c.platform, c.a)).toBeUndefined();
   });
 });
 
@@ -68,16 +81,20 @@ describe('normaliseSourceKey', () => {
     );
   });
 
-  it('keeps Confluence pageId and drops a GitHub query', () => {
+  it('keys a Confluence pageId URL by page id, and drops a GitHub query', () => {
     expect(normaliseSourceKey('confluence', 'https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123')).toBe(
-      'https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123',
+      'https://acme.atlassian.net/wiki/pages/123',
+    );
+    // A Confluence URL in neither page form still keeps pageId, the only id it carries.
+    expect(normaliseSourceKey('confluence', 'https://acme.atlassian.net/wiki/plugins/diff?pageId=5&x=1')).toBe(
+      'https://acme.atlassian.net/wiki/plugins/diff?pageId=5',
     );
     expect(normaliseSourceKey('github', 'https://github.com/o/r/pull/12?w=1')).toBe('https://github.com/o/r/pull/12');
   });
 
   it('does not apply one platform allowlist to another platform', () => {
     expect(normaliseSourceKey('github', 'https://github.com/o/r/pull/12?thread_ts=1')).toBe('https://github.com/o/r/pull/12');
-    expect(normaliseSourceKey('slack', 'https://acme.slack.com/archives/C1/p1?pageId=1')).toBe('https://acme.slack.com/archives/C1/p1');
+    expect(normaliseSourceKey('slack', 'https://acme.slack.com/archives/C1/p1?pageId=1')).toBe('https://slack.com/archives/C1/p1');
   });
 
   it('keeps allowlisted parameters in name order, so parameter order cannot split a key', () => {
@@ -92,9 +109,15 @@ describe('normaliseSourceKey', () => {
     expect(normaliseSourceKey('github', 'https://user:secret@github.com/o/r/pull/12')).toBe('https://github.com/o/r/pull/12');
   });
 
-  it('returns an unparseable input unchanged rather than inventing a key', () => {
-    expect(normaliseSourceKey('github', 'not a url')).toBe('not a url');
-    expect(normaliseSourceKey('github', '')).toBe('');
+  it('gives no key for an unparseable input rather than inventing one', () => {
+    expect(normaliseSourceKey('github', 'not a url')).toBeUndefined();
+    expect(normaliseSourceKey('github', '')).toBeUndefined();
+  });
+
+  it('gives no key for the Teams fallback URL or any synthetic identity, and a key for a real Teams message', () => {
+    expect(normaliseSourceKey('teams', 'https://teams.microsoft.com')).toBeUndefined();
+    expect(normaliseSourceKey('github', 'align://claimed/9f2c')).toBeUndefined();
+    expect(normaliseSourceKey('teams', 'https://teams.microsoft.com/l/message/CH1/m1')).toBe('https://teams.microsoft.com/l/message/CH1/m1');
   });
 
   it('leaves an unknown platform on the four generic rules', () => {

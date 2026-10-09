@@ -49,7 +49,8 @@ export interface FetcherItem {
    * `normaliseSourceKey(platform, source_url)`, set only where one URL names exactly
    * one item (a PR, issue, MR, page, Slack thread, Teams message, Zoom meeting, git
    * commit). A consumer keys an upsert on it, so an edited title updates one row
-   * instead of adding a second. Absent where several items can share a URL.
+   * instead of adding a second. Absent where several items can share a URL, and
+   * wherever normaliseSourceKey returns undefined (a synthetic or fallback URL).
    */
   source_key?: string;
 }

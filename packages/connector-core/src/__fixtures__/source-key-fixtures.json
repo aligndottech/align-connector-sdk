@@ -1,11 +1,14 @@
 {
-  "$comment": "Shared fixture table for normaliseSourceKey(platform, url). Published in @aligndottech/connector-core so every reader (CLI, gateway) checks one table. same: whether normaliseSourceKey(platform, a) === normaliseSourceKey(platform, b). key: the expected normaliseSourceKey(platform, a).",
+  "$comment": "Shared fixture table for normaliseSourceKey(platform, url). Published in @aligndottech/connector-core so every reader (CLI, gateway) checks one table. same: whether normaliseSourceKey(platform, a) === normaliseSourceKey(platform, b). key: the expected normaliseSourceKey(platform, a); null means undefined (no key). no_key cases have no b.",
   "rules": {
     "host_case": "Lowercase the scheme and the host. The path keeps its case.",
     "trailing_slash": "Drop trailing slashes from the path.",
     "fragment": "Drop the fragment.",
     "query": "Drop the query, except the parameters on the platform allowlist (confluence: pageId; slack: thread_ts), kept in name order.",
-    "slug": "Drop a title-derived path segment that changes when the item is renamed (linear, confluence, notion)."
+    "slug": "Drop a title-derived path segment that changes when the item is renamed (linear, confluence, notion).",
+    "page_id": "Confluence: key by host, path prefix and page id only, so space and slug never split a page.",
+    "workspace_host": "Slack: the host of an /archives/ path is slack.com, whichever workspace host the permalink used.",
+    "no_key": "A synthetic identity (align://claimed/, align://unsourced/), a bare host, or an unparseable input gets no key: normaliseSourceKey returns undefined."
   },
   "cases": [
     {
@@ -227,65 +230,65 @@
     {
       "platform": "confluence",
       "rule": "host_case",
-      "a": "HTTPS://ACME.ATLASSIAN.NET/wiki/spaces/S1/pages/123",
-      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "a": "HTTPS://ACME.ATLASSIAN.NET/wiki/pages/123",
+      "b": "https://acme.atlassian.net/wiki/pages/123",
       "same": true,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "scheme and host are lowercased"
     },
     {
       "platform": "confluence",
       "rule": "host_case",
-      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
-      "b": "https://acme.atlassian.net/wiki/spaces/s1/pages/123",
+      "a": "https://acme.atlassian.net/wiki/pages/123",
+      "b": "https://acme.atlassian.net/WIKI/pages/123",
       "same": false,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "the path keeps its case: only scheme and host are lowercased"
     },
     {
       "platform": "confluence",
       "rule": "trailing_slash",
-      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/",
-      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "a": "https://acme.atlassian.net/wiki/pages/123/",
+      "b": "https://acme.atlassian.net/wiki/pages/123",
       "same": true,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "a trailing slash is dropped"
     },
     {
       "platform": "confluence",
       "rule": "trailing_slash",
-      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/",
-      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/124",
+      "a": "https://acme.atlassian.net/wiki/pages/123/",
+      "b": "https://acme.atlassian.net/wiki/pages/124",
       "same": false,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "dropping the slash never merges two different items"
     },
     {
       "platform": "confluence",
       "rule": "fragment",
-      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123#discussion_r1",
-      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "a": "https://acme.atlassian.net/wiki/pages/123#discussion_r1",
+      "b": "https://acme.atlassian.net/wiki/pages/123",
       "same": true,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "the fragment is dropped"
     },
     {
       "platform": "confluence",
       "rule": "fragment",
-      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123#c1",
-      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/124#c1",
+      "a": "https://acme.atlassian.net/wiki/pages/123#c1",
+      "b": "https://acme.atlassian.net/wiki/pages/124#c1",
       "same": false,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "two items with the same fragment stay two items"
     },
     {
       "platform": "confluence",
       "rule": "query",
       "a": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123&src=contextnavpagetreemode",
-      "b": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
+      "b": "https://acme.atlassian.net/wiki/pages/123",
       "same": true,
-      "key": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
-      "why": "pageId is allowlisted and kept; other parameters are dropped"
+      "key": "https://acme.atlassian.net/wiki/pages/123",
+      "why": "pageId becomes the page-id key; other parameters are dropped"
     },
     {
       "platform": "confluence",
@@ -293,7 +296,7 @@
       "a": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
       "b": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=124",
       "same": false,
-      "key": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "pageId identifies the page, so two pageIds stay two keys"
     },
     {
@@ -354,18 +357,18 @@
       "platform": "slack",
       "rule": "query",
       "a": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456&cid=C0123ABC",
-      "b": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
       "same": true,
-      "key": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "key": "https://slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
       "why": "thread_ts is allowlisted and kept; cid is dropped"
     },
     {
       "platform": "slack",
       "rule": "query",
-      "a": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "a": "https://slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
       "b": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.999999",
       "same": false,
-      "key": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "key": "https://slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
       "why": "thread_ts identifies the thread, so two thread_ts values stay two keys"
     },
     {
@@ -752,7 +755,7 @@
       "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Arch+Decision",
       "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Architecture+Decision",
       "same": true,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "the title slug after the page id is dropped"
     },
     {
@@ -761,8 +764,89 @@
       "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Runbook",
       "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/124/Runbook",
       "same": false,
-      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "key": "https://acme.atlassian.net/wiki/pages/123",
       "why": "the page id decides; the same slug on two pages stays two keys"
+    },
+    {
+      "platform": "confluence",
+      "rule": "page_id",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Runbook",
+      "b": "https://acme.atlassian.net/wiki/spaces/OPS/pages/123/Runbook",
+      "same": true,
+      "key": "https://acme.atlassian.net/wiki/pages/123",
+      "why": "a page moved to another space keeps its key"
+    },
+    {
+      "platform": "confluence",
+      "rule": "page_id",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "b": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
+      "same": true,
+      "key": "https://acme.atlassian.net/wiki/pages/123",
+      "why": "the space URL and the viewpage.action URL of one page give one key"
+    },
+    {
+      "platform": "confluence",
+      "rule": "page_id",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Runbook",
+      "b": "https://acme.atlassian.net/wiki/spaces/OPS/pages/124/Runbook",
+      "same": false,
+      "key": "https://acme.atlassian.net/wiki/pages/123",
+      "why": "two page ids stay two keys, whatever the space"
+    },
+    {
+      "platform": "confluence",
+      "rule": "page_id",
+      "a": "https://api.atlassian.com/ex/confluence/cid/wiki/spaces/S1/pages/123/X",
+      "b": "https://api.atlassian.com/ex/confluence/cid/wiki/pages/123",
+      "same": true,
+      "key": "https://api.atlassian.com/ex/confluence/cid/wiki/pages/123",
+      "why": "the OAuth fallback base keeps its prefix and drops the space"
+    },
+    {
+      "platform": "slack",
+      "rule": "workspace_host",
+      "a": "https://acme.slack.com/archives/C0123ABC/p1700000000123456",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "same": true,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "a workspace host and slack.com give one key for /archives/ paths"
+    },
+    {
+      "platform": "slack",
+      "rule": "workspace_host",
+      "a": "https://acme.enterprise.slack.com/archives/C0123ABC/p1700000000123456",
+      "b": "https://other.slack.com/archives/C0123ABC/p1700000000123456",
+      "same": true,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "any *.slack.com host normalises to slack.com"
+    },
+    {
+      "platform": "slack",
+      "rule": "workspace_host",
+      "a": "https://acme.slack.com/archives/C0123ABC/p1700000000123456",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000999999",
+      "same": false,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "a different ts stays a different key across hosts"
+    },
+    {
+      "platform": "slack",
+      "rule": "workspace_host",
+      "a": "https://acme.slack.com/archives/C0123ABC/p1700000000123456",
+      "b": "https://acme.slack.com/archives/C0999XYZ/p1700000000123456",
+      "same": false,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "a different channel stays a different key"
+    },
+    {
+      "platform": "slack",
+      "rule": "workspace_host",
+      "a": "https://acme.slack.com/team/U123",
+      "b": "https://slack.com/team/U123",
+      "same": false,
+      "key": "https://acme.slack.com/team/U123",
+      "why": "only /archives/ paths are host-normalised"
     },
     {
       "platform": "notion",
@@ -808,6 +892,41 @@
       "same": false,
       "key": "git://commit/0a1b2c3d4e5f",
       "why": "two shas stay two keys"
+    },
+    {
+      "platform": "teams",
+      "rule": "no_key",
+      "a": "https://teams.microsoft.com",
+      "key": null,
+      "why": "the Teams fetcher's fallback when a message has no webUrl names no item"
+    },
+    {
+      "platform": "teams",
+      "rule": "no_key",
+      "a": "https://teams.microsoft.com/",
+      "key": null,
+      "why": "the fallback with a trailing slash is still only a host"
+    },
+    {
+      "platform": "github",
+      "rule": "no_key",
+      "a": "align://claimed/9f2c",
+      "key": null,
+      "why": "an identity Align minted (isSyntheticSource) is not a source"
+    },
+    {
+      "platform": "github",
+      "rule": "no_key",
+      "a": "align://unsourced/9f2c",
+      "key": null,
+      "why": "an unsourced synthetic identity is not a source"
+    },
+    {
+      "platform": "notion",
+      "rule": "no_key",
+      "a": "not a url",
+      "key": null,
+      "why": "an unparseable input gets no key rather than an invented one"
     }
   ]
 }
