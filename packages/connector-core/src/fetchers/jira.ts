@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { providerError } from './errors.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { buildFetchReport } from './util/report.js';
 
 interface JiraIssue {
   key: string;
@@ -82,6 +83,8 @@ export class JiraFetcher implements ConnectorFetcher {
 
     const browseBase = isOAuth ? (siteBase ?? `https://api.atlassian.com/ex/jira/${cloudId}`) : base;
 
+    // No continuation token left and nothing trimmed by the limit: the JQL was read to its end.
+    const exhausted = nextPageToken === undefined && issues.length <= limit;
     const items = issues.slice(0, limit).map((issue) => {
       const desc = extractAdfText(issue.fields.description);
       const createdAt = toIsoOrUndefined(issue.fields.created);
@@ -107,6 +110,9 @@ export class JiraFetcher implements ConnectorFetcher {
           : {}),
       } satisfies FetcherItem;
     });
-    return { items, report: { platform: 'jira', scanned: issues.length, requested: limit, skips: [] } };
+    return {
+      items,
+      report: buildFetchReport(items, { platform: 'jira', scanned: issues.length, requested: limit, skips: [], scope: 'yours', exhausted }),
+    };
   }
 }

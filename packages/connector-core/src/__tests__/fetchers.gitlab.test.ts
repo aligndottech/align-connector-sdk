@@ -117,5 +117,6 @@ describe('GitLabFetcher pagination and report (ALI-828)', () => {
     const { items, report } = await new GitLabFetcher().fetchWithReport({ token: 'tok', limit: 50 });
     expect(items).toEqual([]);
     expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringContaining('merge request') }]);
+    expect(report.complete).toBe(false); // an unread page is not the end of the source
   });
 });

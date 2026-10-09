@@ -36,7 +36,10 @@ export class MiroFetcher implements ConnectorFetcher {
   async fetchWithReport({ token, limit = 50 }: ConnectorFetcherOptions): Promise<FetchResult> {
     // call your tool's read API, map results to FetcherItem[]
     const items: FetcherItem[] = [];
-    return { items, report: { platform: 'miro', scanned: 0, requested: limit, skips: [] } };
+    // `complete`: you read to the end of what was asked, so a sync may advance its watermark.
+    // `scope`: 'yours' (only the caller's items) or 'team' (everything the token can read).
+    // `buildFetchReport(items, { ..., exhausted })` from connector-core fills these for you.
+    return { items, report: { platform: 'miro', scanned: 0, requested: limit, skips: [], complete: true, scope: 'team' } };
   }
 }
 ```

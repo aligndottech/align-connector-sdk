@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 interface GitHubSearchItem {
   html_url: string;
@@ -42,9 +43,16 @@ const PARALLEL_DISCUSSION_FETCHES = 5;
 const MAX_SECTION_CHARS = 4000;
 
 /** Page through a GitHub search query until `target` items are collected (or the
- *  results run out / the 1000-result ceiling is hit). */
-async function searchAll(query: string, headers: Record<string, string>, target: number): Promise<GitHubSearchItem[]> {
+ *  results run out / the 1000-result ceiling is hit). `exhausted` is true only when a
+ *  short page said the results ran out; a failed page, the target or the ceiling
+ *  ending the loop all leave it false. */
+async function searchAll(
+  query: string,
+  headers: Record<string, string>,
+  target: number,
+): Promise<{ rows: GitHubSearchItem[]; exhausted: boolean }> {
   const out: GitHubSearchItem[] = [];
+  let exhausted = false;
   for (let page = 1; out.length < target && page <= GH_SEARCH_MAX_PAGES; page++) {
     const perPage = Math.min(target - out.length, GH_PER_PAGE_MAX);
     const res = await fetch(`${query}&sort=updated&per_page=${perPage}&page=${page}`, { headers });
@@ -52,9 +60,12 @@ async function searchAll(query: string, headers: Record<string, string>, target:
     const data = (await res.json()) as { items?: GitHubSearchItem[] };
     const batch = data.items ?? [];
     out.push(...batch);
-    if (batch.length < perPage) break; // last page
+    if (batch.length < perPage) {
+      exhausted = true; // last page
+      break;
+    }
   }
-  return out.slice(0, target);
+  return { rows: out.slice(0, target), exhausted };
 }
 
 /** Alternate between two ordered lists (PRs, issues) so neither can crowd the
@@ -237,13 +248,19 @@ export class GitHubFetcher implements ConnectorFetcher {
     // authored it AND someone else reviewed you on it too) - dedupe before
     // the item ever reaches the discussion-fetch stage.
     const prByUrl = new Map<string, GitHubSearchItem>();
-    for (const pr of [...involvesPrs, ...reviewedPrs]) prByUrl.set(pr.html_url, pr);
+    for (const pr of [...involvesPrs.rows, ...reviewedPrs.rows]) prByUrl.set(pr.html_url, pr);
 
-    const rows = interleave([...prByUrl.values()], issues, limit);
+    const rows = interleave([...prByUrl.values()], issues.rows, limit);
+    const exhausted =
+      involvesPrs.exhausted && reviewedPrs.exhausted && issues.exhausted && rows.length === prByUrl.size + issues.rows.length;
 
     const items = await mapWithConcurrency(rows, PARALLEL_DISCUSSION_FETCHES, (r) =>
       r.kind === 'pr' ? buildPrItem(r.row, headers) : buildIssueItem(r.row, headers),
     );
-    return { items, report: { platform: 'github', scanned: rows.length, requested: limit, skips: [] } };
+    // Scope stays 'yours' with `repo`: the queries are still involves:/reviewed-by: the caller.
+    return {
+      items,
+      report: buildFetchReport(items, { platform: 'github', scanned: rows.length, requested: limit, skips: [], scope: 'yours', exhausted }),
+    };
   }
 }

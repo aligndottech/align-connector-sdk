@@ -1,0 +1,813 @@
+{
+  "$comment": "Shared fixture table for normaliseSourceKey(platform, url). Published in @aligndottech/connector-core so every reader (CLI, gateway) checks one table. same: whether normaliseSourceKey(platform, a) === normaliseSourceKey(platform, b). key: the expected normaliseSourceKey(platform, a).",
+  "rules": {
+    "host_case": "Lowercase the scheme and the host. The path keeps its case.",
+    "trailing_slash": "Drop trailing slashes from the path.",
+    "fragment": "Drop the fragment.",
+    "query": "Drop the query, except the parameters on the platform allowlist (confluence: pageId; slack: thread_ts), kept in name order.",
+    "slug": "Drop a title-derived path segment that changes when the item is renamed (linear, confluence, notion)."
+  },
+  "cases": [
+    {
+      "platform": "github",
+      "rule": "host_case",
+      "a": "HTTPS://GITHUB.COM/o/r/pull/12",
+      "b": "https://github.com/o/r/pull/12",
+      "same": true,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "github",
+      "rule": "host_case",
+      "a": "https://github.com/o/r/pull/12",
+      "b": "https://github.com/O/r/pull/12",
+      "same": false,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "github",
+      "rule": "trailing_slash",
+      "a": "https://github.com/o/r/pull/12/",
+      "b": "https://github.com/o/r/pull/12",
+      "same": true,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "github",
+      "rule": "trailing_slash",
+      "a": "https://github.com/o/r/pull/12/",
+      "b": "https://github.com/o/r/issues/12",
+      "same": false,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "github",
+      "rule": "fragment",
+      "a": "https://github.com/o/r/pull/12#discussion_r1",
+      "b": "https://github.com/o/r/pull/12",
+      "same": true,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "github",
+      "rule": "fragment",
+      "a": "https://github.com/o/r/pull/12#c1",
+      "b": "https://github.com/o/r/issues/12#c1",
+      "same": false,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "github",
+      "rule": "query",
+      "a": "https://github.com/o/r/pull/12?w=1",
+      "b": "https://github.com/o/r/pull/12",
+      "same": true,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "the query is dropped: this platform allowlists no parameter"
+    },
+    {
+      "platform": "github",
+      "rule": "query",
+      "a": "https://github.com/o/r/pull/12?pageId=1",
+      "b": "https://github.com/o/r/issues/12?pageId=1",
+      "same": false,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "another platform's allowlisted parameter is dropped here too, and two items stay two keys"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "host_case",
+      "a": "HTTPS://GITLAB.COM/g/p/-/merge_requests/3",
+      "b": "https://gitlab.com/g/p/-/merge_requests/3",
+      "same": true,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "host_case",
+      "a": "https://gitlab.com/g/p/-/merge_requests/3",
+      "b": "https://gitlab.com/G/p/-/merge_requests/3",
+      "same": false,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "trailing_slash",
+      "a": "https://gitlab.com/g/p/-/merge_requests/3/",
+      "b": "https://gitlab.com/g/p/-/merge_requests/3",
+      "same": true,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "trailing_slash",
+      "a": "https://gitlab.com/g/p/-/merge_requests/3/",
+      "b": "https://gitlab.com/g/p/-/merge_requests/4",
+      "same": false,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "fragment",
+      "a": "https://gitlab.com/g/p/-/merge_requests/3#discussion_r1",
+      "b": "https://gitlab.com/g/p/-/merge_requests/3",
+      "same": true,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "fragment",
+      "a": "https://gitlab.com/g/p/-/merge_requests/3#c1",
+      "b": "https://gitlab.com/g/p/-/merge_requests/4#c1",
+      "same": false,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "query",
+      "a": "https://gitlab.com/g/p/-/merge_requests/3?w=1",
+      "b": "https://gitlab.com/g/p/-/merge_requests/3",
+      "same": true,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "the query is dropped: this platform allowlists no parameter"
+    },
+    {
+      "platform": "gitlab",
+      "rule": "query",
+      "a": "https://gitlab.com/g/p/-/merge_requests/3?pageId=1",
+      "b": "https://gitlab.com/g/p/-/merge_requests/4?pageId=1",
+      "same": false,
+      "key": "https://gitlab.com/g/p/-/merge_requests/3",
+      "why": "another platform's allowlisted parameter is dropped here too, and two items stay two keys"
+    },
+    {
+      "platform": "jira",
+      "rule": "host_case",
+      "a": "HTTPS://ACME.ATLASSIAN.NET/browse/ALI-12",
+      "b": "https://acme.atlassian.net/browse/ALI-12",
+      "same": true,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "jira",
+      "rule": "host_case",
+      "a": "https://acme.atlassian.net/browse/ALI-12",
+      "b": "https://acme.atlassian.net/browse/ali-12",
+      "same": false,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "jira",
+      "rule": "trailing_slash",
+      "a": "https://acme.atlassian.net/browse/ALI-12/",
+      "b": "https://acme.atlassian.net/browse/ALI-12",
+      "same": true,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "jira",
+      "rule": "trailing_slash",
+      "a": "https://acme.atlassian.net/browse/ALI-12/",
+      "b": "https://acme.atlassian.net/browse/ALI-13",
+      "same": false,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "jira",
+      "rule": "fragment",
+      "a": "https://acme.atlassian.net/browse/ALI-12#discussion_r1",
+      "b": "https://acme.atlassian.net/browse/ALI-12",
+      "same": true,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "jira",
+      "rule": "fragment",
+      "a": "https://acme.atlassian.net/browse/ALI-12#c1",
+      "b": "https://acme.atlassian.net/browse/ALI-13#c1",
+      "same": false,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "jira",
+      "rule": "query",
+      "a": "https://acme.atlassian.net/browse/ALI-12?w=1",
+      "b": "https://acme.atlassian.net/browse/ALI-12",
+      "same": true,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "the query is dropped: this platform allowlists no parameter"
+    },
+    {
+      "platform": "jira",
+      "rule": "query",
+      "a": "https://acme.atlassian.net/browse/ALI-12?pageId=1",
+      "b": "https://acme.atlassian.net/browse/ALI-13?pageId=1",
+      "same": false,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "another platform's allowlisted parameter is dropped here too, and two items stay two keys"
+    },
+    {
+      "platform": "confluence",
+      "rule": "host_case",
+      "a": "HTTPS://ACME.ATLASSIAN.NET/wiki/spaces/S1/pages/123",
+      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "same": true,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "confluence",
+      "rule": "host_case",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "b": "https://acme.atlassian.net/wiki/spaces/s1/pages/123",
+      "same": false,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "confluence",
+      "rule": "trailing_slash",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/",
+      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "same": true,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "confluence",
+      "rule": "trailing_slash",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/",
+      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/124",
+      "same": false,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "confluence",
+      "rule": "fragment",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123#discussion_r1",
+      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "same": true,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "confluence",
+      "rule": "fragment",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123#c1",
+      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/124#c1",
+      "same": false,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "confluence",
+      "rule": "query",
+      "a": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123&src=contextnavpagetreemode",
+      "b": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
+      "same": true,
+      "key": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
+      "why": "pageId is allowlisted and kept; other parameters are dropped"
+    },
+    {
+      "platform": "confluence",
+      "rule": "query",
+      "a": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
+      "b": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=124",
+      "same": false,
+      "key": "https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=123",
+      "why": "pageId identifies the page, so two pageIds stay two keys"
+    },
+    {
+      "platform": "slack",
+      "rule": "host_case",
+      "a": "HTTPS://SLACK.COM/archives/C0123ABC/p1700000000123456",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "same": true,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "slack",
+      "rule": "host_case",
+      "a": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "b": "https://slack.com/archives/c0123abc/p1700000000123456",
+      "same": false,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "slack",
+      "rule": "trailing_slash",
+      "a": "https://slack.com/archives/C0123ABC/p1700000000123456/",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "same": true,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "slack",
+      "rule": "trailing_slash",
+      "a": "https://slack.com/archives/C0123ABC/p1700000000123456/",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000999999",
+      "same": false,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "slack",
+      "rule": "fragment",
+      "a": "https://slack.com/archives/C0123ABC/p1700000000123456#discussion_r1",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "same": true,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "slack",
+      "rule": "fragment",
+      "a": "https://slack.com/archives/C0123ABC/p1700000000123456#c1",
+      "b": "https://slack.com/archives/C0123ABC/p1700000000999999#c1",
+      "same": false,
+      "key": "https://slack.com/archives/C0123ABC/p1700000000123456",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "slack",
+      "rule": "query",
+      "a": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456&cid=C0123ABC",
+      "b": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "same": true,
+      "key": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "why": "thread_ts is allowlisted and kept; cid is dropped"
+    },
+    {
+      "platform": "slack",
+      "rule": "query",
+      "a": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "b": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.999999",
+      "same": false,
+      "key": "https://acme.slack.com/archives/C0123ABC/p1700000000555555?thread_ts=1700000000.123456",
+      "why": "thread_ts identifies the thread, so two thread_ts values stay two keys"
+    },
+    {
+      "platform": "teams",
+      "rule": "host_case",
+      "a": "HTTPS://TEAMS.MICROSOFT.COM/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "same": true,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "teams",
+      "rule": "host_case",
+      "a": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "b": "https://teams.microsoft.com/l/message/19%3AABC%40thread.tacv2/1616965872395",
+      "same": false,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "teams",
+      "rule": "trailing_slash",
+      "a": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395/",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "same": true,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "teams",
+      "rule": "trailing_slash",
+      "a": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395/",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872396",
+      "same": false,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "teams",
+      "rule": "fragment",
+      "a": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395#discussion_r1",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "same": true,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "teams",
+      "rule": "fragment",
+      "a": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395#c1",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872396#c1",
+      "same": false,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "teams",
+      "rule": "query",
+      "a": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395?groupId=g1&tenantId=t1&createdTime=1616965872395&parentMessageId=1616965872395&teamName=Eng&channelName=General",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "same": true,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "Teams webUrl query (team and channel names, ids) is dropped; the path holds the channel and message ids"
+    },
+    {
+      "platform": "teams",
+      "rule": "query",
+      "a": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395?groupId=g1&tenantId=t1&createdTime=1616965872395&parentMessageId=1616965872395&teamName=Eng&channelName=General",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872396?groupId=g1&tenantId=t1&createdTime=1616965872395&parentMessageId=1616965872395&teamName=Eng&channelName=General",
+      "same": false,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "two messages with the same query stay two keys"
+    },
+    {
+      "platform": "zoom",
+      "rule": "host_case",
+      "a": "HTTPS://ZOOM.US/recording/abc%2Bdef%3D%3D",
+      "b": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "zoom",
+      "rule": "host_case",
+      "a": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "b": "https://zoom.us/recording/ABC%2Bdef%3D%3D",
+      "same": false,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "zoom",
+      "rule": "trailing_slash",
+      "a": "https://zoom.us/recording/abc%2Bdef%3D%3D/",
+      "b": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "zoom",
+      "rule": "trailing_slash",
+      "a": "https://zoom.us/recording/abc%2Bdef%3D%3D/",
+      "b": "https://zoom.us/recording/xyz%3D%3D",
+      "same": false,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "zoom",
+      "rule": "fragment",
+      "a": "https://zoom.us/recording/abc%2Bdef%3D%3D#discussion_r1",
+      "b": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "zoom",
+      "rule": "fragment",
+      "a": "https://zoom.us/recording/abc%2Bdef%3D%3D#c1",
+      "b": "https://zoom.us/recording/xyz%3D%3D#c1",
+      "same": false,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "https://zoom.us/recording/abc%2Bdef%3D%3D?w=1",
+      "b": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "the query is dropped: this platform allowlists no parameter"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "https://zoom.us/recording/abc%2Bdef%3D%3D?pageId=1",
+      "b": "https://zoom.us/recording/xyz%3D%3D?pageId=1",
+      "same": false,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "another platform's allowlisted parameter is dropped here too, and two items stay two keys"
+    },
+    {
+      "platform": "linear",
+      "rule": "host_case",
+      "a": "HTTPS://LINEAR.APP/acme/issue/ENG-1",
+      "b": "https://linear.app/acme/issue/ENG-1",
+      "same": true,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "linear",
+      "rule": "host_case",
+      "a": "https://linear.app/acme/issue/ENG-1",
+      "b": "https://linear.app/acme/issue/eng-1",
+      "same": false,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "linear",
+      "rule": "trailing_slash",
+      "a": "https://linear.app/acme/issue/ENG-1/",
+      "b": "https://linear.app/acme/issue/ENG-1",
+      "same": true,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "linear",
+      "rule": "trailing_slash",
+      "a": "https://linear.app/acme/issue/ENG-1/",
+      "b": "https://linear.app/acme/issue/ENG-2",
+      "same": false,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "linear",
+      "rule": "fragment",
+      "a": "https://linear.app/acme/issue/ENG-1#discussion_r1",
+      "b": "https://linear.app/acme/issue/ENG-1",
+      "same": true,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "linear",
+      "rule": "fragment",
+      "a": "https://linear.app/acme/issue/ENG-1#c1",
+      "b": "https://linear.app/acme/issue/ENG-2#c1",
+      "same": false,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "linear",
+      "rule": "query",
+      "a": "https://linear.app/acme/issue/ENG-1?w=1",
+      "b": "https://linear.app/acme/issue/ENG-1",
+      "same": true,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "the query is dropped: this platform allowlists no parameter"
+    },
+    {
+      "platform": "linear",
+      "rule": "query",
+      "a": "https://linear.app/acme/issue/ENG-1?pageId=1",
+      "b": "https://linear.app/acme/issue/ENG-2?pageId=1",
+      "same": false,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "another platform's allowlisted parameter is dropped here too, and two items stay two keys"
+    },
+    {
+      "platform": "notion",
+      "rule": "host_case",
+      "a": "HTTPS://WWW.NOTION.SO/0123456789abcdef0123456789abcdef",
+      "b": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "same": true,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "notion",
+      "rule": "host_case",
+      "a": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "b": "https://www.notion.so/0123456789ABCDEF0123456789ABCDEF",
+      "same": false,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "notion",
+      "rule": "trailing_slash",
+      "a": "https://www.notion.so/0123456789abcdef0123456789abcdef/",
+      "b": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "same": true,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "notion",
+      "rule": "trailing_slash",
+      "a": "https://www.notion.so/0123456789abcdef0123456789abcdef/",
+      "b": "https://www.notion.so/fedcba9876543210fedcba9876543210",
+      "same": false,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "notion",
+      "rule": "fragment",
+      "a": "https://www.notion.so/0123456789abcdef0123456789abcdef#discussion_r1",
+      "b": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "same": true,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "notion",
+      "rule": "fragment",
+      "a": "https://www.notion.so/0123456789abcdef0123456789abcdef#c1",
+      "b": "https://www.notion.so/fedcba9876543210fedcba9876543210#c1",
+      "same": false,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "notion",
+      "rule": "query",
+      "a": "https://www.notion.so/0123456789abcdef0123456789abcdef?w=1",
+      "b": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "same": true,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "the query is dropped: this platform allowlists no parameter"
+    },
+    {
+      "platform": "notion",
+      "rule": "query",
+      "a": "https://www.notion.so/0123456789abcdef0123456789abcdef?pageId=1",
+      "b": "https://www.notion.so/fedcba9876543210fedcba9876543210?pageId=1",
+      "same": false,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "another platform's allowlisted parameter is dropped here too, and two items stay two keys"
+    },
+    {
+      "platform": "git",
+      "rule": "host_case",
+      "a": "HTTPS://GITHUB.COM/o/r/commit/0a1b2c3d4e5f",
+      "b": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "same": true,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "scheme and host are lowercased"
+    },
+    {
+      "platform": "git",
+      "rule": "host_case",
+      "a": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "b": "https://github.com/o/r/commit/0A1B2C3D4E5F",
+      "same": false,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "the path keeps its case: only scheme and host are lowercased"
+    },
+    {
+      "platform": "git",
+      "rule": "trailing_slash",
+      "a": "https://github.com/o/r/commit/0a1b2c3d4e5f/",
+      "b": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "same": true,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "a trailing slash is dropped"
+    },
+    {
+      "platform": "git",
+      "rule": "trailing_slash",
+      "a": "https://github.com/o/r/commit/0a1b2c3d4e5f/",
+      "b": "https://github.com/o/r/commit/ffffffffffff",
+      "same": false,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "dropping the slash never merges two different items"
+    },
+    {
+      "platform": "git",
+      "rule": "fragment",
+      "a": "https://github.com/o/r/commit/0a1b2c3d4e5f#discussion_r1",
+      "b": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "same": true,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "the fragment is dropped"
+    },
+    {
+      "platform": "git",
+      "rule": "fragment",
+      "a": "https://github.com/o/r/commit/0a1b2c3d4e5f#c1",
+      "b": "https://github.com/o/r/commit/ffffffffffff#c1",
+      "same": false,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "two items with the same fragment stay two items"
+    },
+    {
+      "platform": "git",
+      "rule": "query",
+      "a": "https://github.com/o/r/commit/0a1b2c3d4e5f?w=1",
+      "b": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "same": true,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "the query is dropped: this platform allowlists no parameter"
+    },
+    {
+      "platform": "git",
+      "rule": "query",
+      "a": "https://github.com/o/r/commit/0a1b2c3d4e5f?pageId=1",
+      "b": "https://github.com/o/r/commit/ffffffffffff?pageId=1",
+      "same": false,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "another platform's allowlisted parameter is dropped here too, and two items stay two keys"
+    },
+    {
+      "platform": "linear",
+      "rule": "slug",
+      "a": "https://linear.app/acme/issue/ENG-1/pick-queue",
+      "b": "https://linear.app/acme/issue/ENG-1/pick-a-queue",
+      "same": true,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "the title slug after the issue key is dropped"
+    },
+    {
+      "platform": "linear",
+      "rule": "slug",
+      "a": "https://linear.app/acme/issue/ENG-1/pick-queue",
+      "b": "https://linear.app/acme/issue/ENG-2/pick-queue",
+      "same": false,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "the issue key decides; the same slug on two issues stays two keys"
+    },
+    {
+      "platform": "confluence",
+      "rule": "slug",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Arch+Decision",
+      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Architecture+Decision",
+      "same": true,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "the title slug after the page id is dropped"
+    },
+    {
+      "platform": "confluence",
+      "rule": "slug",
+      "a": "https://acme.atlassian.net/wiki/spaces/S1/pages/123/Runbook",
+      "b": "https://acme.atlassian.net/wiki/spaces/S1/pages/124/Runbook",
+      "same": false,
+      "key": "https://acme.atlassian.net/wiki/spaces/S1/pages/123",
+      "why": "the page id decides; the same slug on two pages stays two keys"
+    },
+    {
+      "platform": "notion",
+      "rule": "slug",
+      "a": "https://www.notion.so/acme/Old-Title-0123456789abcdef0123456789abcdef",
+      "b": "https://www.notion.so/acme/New-Title-0123456789abcdef0123456789abcdef",
+      "same": true,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "the key is the 32-hex page id; title and workspace segments are dropped"
+    },
+    {
+      "platform": "notion",
+      "rule": "slug",
+      "a": "https://notion.so/0123456789abcdef0123456789abcdef",
+      "b": "https://www.notion.so/Spec-0123456789abcdef0123456789abcdef",
+      "same": true,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "the fetcher's fallback URL (notion.so/<id>) and the API URL give one key"
+    },
+    {
+      "platform": "notion",
+      "rule": "slug",
+      "a": "https://www.notion.so/acme/Spec-0123456789abcdef0123456789abcdef",
+      "b": "https://www.notion.so/acme/Spec-fedcba9876543210fedcba9876543210",
+      "same": false,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "the page id decides; the same title on two pages stays two keys"
+    },
+    {
+      "platform": "git",
+      "rule": "host_case",
+      "a": "GIT://Commit/0a1b2c3d4e5f",
+      "b": "git://commit/0a1b2c3d4e5f",
+      "same": true,
+      "key": "git://commit/0a1b2c3d4e5f",
+      "why": "a non-special scheme still gets its scheme and host lowercased"
+    },
+    {
+      "platform": "git",
+      "rule": "host_case",
+      "a": "git://commit/0a1b2c3d4e5f",
+      "b": "git://commit/ffffffffffff",
+      "same": false,
+      "key": "git://commit/0a1b2c3d4e5f",
+      "why": "two shas stay two keys"
+    }
+  ]
+}

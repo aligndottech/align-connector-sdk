@@ -1,6 +1,7 @@
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '../types/fetcher.js';
 import { buildCommitUrl, formatCommitAsText, type GitCommit } from './util/git.js';
 import { toIsoOrUndefined } from './util/time.js';
+import { buildFetchReport } from './util/report.js';
 
 export type { GitCommit } from './util/git.js';
 
@@ -40,6 +41,18 @@ export class GitFetcher implements ConnectorFetcher {
         ...(c.author ? { author: { name: c.author } } : {}),
       } satisfies FetcherItem;
     });
-    return { items, report: { platform: 'git', scanned: commits.length, requested: limit, skips: [] } };
+    // The source returns at most `limit` commits, so a full batch may have more behind it.
+    // Scope is 'team': local history holds every author's commits.
+    return {
+      items,
+      report: buildFetchReport(items, {
+        platform: 'git',
+        scanned: commits.length,
+        requested: limit,
+        skips: [],
+        scope: 'team',
+        exhausted: commits.length < limit,
+      }),
+    };
   }
 }

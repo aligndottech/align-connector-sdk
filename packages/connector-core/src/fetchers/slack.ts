@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 async function slackGet(
   endpoint: string,
@@ -235,10 +236,16 @@ export class SlackFetcher implements ConnectorFetcher {
     let channelsUnreadable = 0;
     let threadsUnreadable = 0;
     let channelsOutOfTime = 0;
+    // The item limit leaving a channel or thread unread. Not a skip line (the caller set
+    // the limit), but the read is not complete.
+    let cutByLimit = false;
 
     for (let channelIndex = 0; channelIndex < channels.length; channelIndex++) {
       const channel = channels[channelIndex];
-      if (items.length >= limit) break;
+      if (items.length >= limit) {
+        cutByLimit = true;
+        break;
+      }
       if (channelIndex > 0) {
         // Checked BEFORE paying the delay: the budget bounds the loop, not the sleep.
         if (Date.now() - startedAt > timeBudgetMs) {
@@ -260,7 +267,10 @@ export class SlackFetcher implements ConnectorFetcher {
         shortMessages += hist.rows.length - threads.length;
 
         for (const thread of threads) {
-          if (items.length >= limit) break;
+          if (items.length >= limit) {
+            cutByLimit = true;
+            break;
+          }
           threadsScanned += 1;
           try {
             const replies = await slackPaged<SlackMessage>(
@@ -349,6 +359,16 @@ export class SlackFetcher implements ConnectorFetcher {
       skips.push({ kind: 'error', count: threadsUnreadable, detail: 'threads whose replies could not be read' });
     }
 
-    return { items, report: { platform: 'slack', scanned: threadsScanned, requested: limit, skips } };
+    return {
+      items,
+      report: buildFetchReport(items, {
+        platform: 'slack',
+        scanned: threadsScanned,
+        requested: limit,
+        skips,
+        scope: 'team',
+        exhausted: !cutByLimit,
+      }),
+    };
   }
 }

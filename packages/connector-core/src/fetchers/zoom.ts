@@ -2,6 +2,7 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
+import { buildFetchReport } from './util/report.js';
 
 interface ZoomRecordingFile {
   file_type: string;
@@ -98,11 +99,16 @@ export class ZoomFetcher implements ConnectorFetcher {
     let scanned = 0;
     let noTranscript = 0;
     let unreadable = 0;
+    // The item limit leaving a window, a page or a meeting unread.
+    let cutByLimit = false;
 
     // The single-meeting path has no window and is one request by construction.
     const windows: Array<{ from: string; to: string } | undefined> = uuid ? [undefined] : recordingWindows(Date.now(), daysBack);
     for (const window of windows) {
-      if (items.length >= limit) break;
+      if (items.length >= limit) {
+        cutByLimit = true;
+        break;
+      }
       let pageToken: string | undefined;
       do {
       const path = uuid
@@ -115,7 +121,10 @@ export class ZoomFetcher implements ConnectorFetcher {
       const meetings = data.meetings ?? (data.recording_files ? [data as ZoomMeeting] : []);
 
       for (const meeting of meetings) {
-        if (items.length >= limit) break;
+        if (items.length >= limit) {
+          cutByLimit = true;
+          break;
+        }
         if (seen.has(meeting.uuid)) continue;
         seen.add(meeting.uuid);
         scanned += 1;
@@ -159,11 +168,15 @@ export class ZoomFetcher implements ConnectorFetcher {
       }
       pageToken = uuid ? undefined : data.next_page_token || undefined;
       } while (pageToken && items.length < limit);
+      if (pageToken) cutByLimit = true;
     }
 
     const skips: FetchSkip[] = [];
     if (noTranscript > 0) skips.push({ kind: 'shape', count: noTranscript, detail: 'meetings with no completed transcript' });
     if (unreadable > 0) skips.push({ kind: 'error', count: unreadable, detail: 'transcripts that could not be downloaded' });
-    return { items, report: { platform: 'zoom', scanned, requested: limit, skips } };
+    return {
+      items,
+      report: buildFetchReport(items, { platform: 'zoom', scanned, requested: limit, skips, scope: 'yours', exhausted: !cutByLimit }),
+    };
   }
 }
