@@ -8,7 +8,11 @@
     "slug": "Drop a title-derived path segment that changes when the item is renamed (linear, confluence, notion).",
     "page_id": "Confluence: key by host, path prefix and page id only, so space and slug never split a page.",
     "workspace_host": "Slack: the host of an /archives/ path is slack.com, whichever workspace host the permalink used.",
-    "no_key": "A synthetic identity (align://claimed/, align://unsourced/), a bare host, or an unparseable input gets no key: normaliseSourceKey returns undefined."
+    "github_owner_case": "github.com: owner and repo path segments are lowercased (GitHub treats them case-insensitively); the rest of the path keeps its case.",
+    "percent_case": "Percent-escape hex digits are uppercased (%2f -> %2F).",
+    "notion_peek": "Notion: a ?p=<pageid> peek URL is keyed by that page id.",
+    "comment_anchor": "A URL pointing at a comment (GitHub #issuecomment-N, Jira focusedCommentId, Linear #comment-x) maps to its item: comments belong to their item, by design.",
+    "no_key": "A synthetic identity (align://claimed/, align://unsourced/), a bare host (with or without a query), an Atlassian OAuth fallback URL (api.atlassian.com/ex/...), or an unparseable input gets no key: normaliseSourceKey returns undefined."
   },
   "cases": [
     {
@@ -24,7 +28,7 @@
       "platform": "github",
       "rule": "host_case",
       "a": "https://github.com/o/r/pull/12",
-      "b": "https://github.com/O/r/pull/12",
+      "b": "https://github.com/o/r/tree/Main",
       "same": false,
       "key": "https://github.com/o/r/pull/12",
       "why": "the path keeps its case: only scheme and host are lowercased"
@@ -795,15 +799,6 @@
       "why": "two page ids stay two keys, whatever the space"
     },
     {
-      "platform": "confluence",
-      "rule": "page_id",
-      "a": "https://api.atlassian.com/ex/confluence/cid/wiki/spaces/S1/pages/123/X",
-      "b": "https://api.atlassian.com/ex/confluence/cid/wiki/pages/123",
-      "same": true,
-      "key": "https://api.atlassian.com/ex/confluence/cid/wiki/pages/123",
-      "why": "the OAuth fallback base keeps its prefix and drops the space"
-    },
-    {
       "platform": "slack",
       "rule": "workspace_host",
       "a": "https://acme.slack.com/archives/C0123ABC/p1700000000123456",
@@ -927,6 +922,171 @@
       "a": "not a url",
       "key": null,
       "why": "an unparseable input gets no key rather than an invented one"
+    },
+    {
+      "platform": "confluence",
+      "rule": "no_key",
+      "a": "https://api.atlassian.com/ex/confluence/cid/wiki/spaces/S1/pages/123/X",
+      "key": null,
+      "why": "the Atlassian OAuth fallback host carries a cloudId, not the site host, so it cannot match the site URL: no key"
+    },
+    {
+      "platform": "jira",
+      "rule": "no_key",
+      "a": "https://api.atlassian.com/ex/jira/cid/browse/ALI-12",
+      "key": null,
+      "why": "the Jira OAuth fallback browse URL gets no key for the same reason"
+    },
+    {
+      "platform": "teams",
+      "rule": "no_key",
+      "a": "https://teams.microsoft.com/?tenantId=t1",
+      "key": null,
+      "why": "a bare host with a query still names no item"
+    },
+    {
+      "platform": "github",
+      "rule": "github_owner_case",
+      "a": "https://github.com/Aligndottech/Align-CLI/pull/12",
+      "b": "https://github.com/aligndottech/align-cli/pull/12",
+      "same": true,
+      "key": "https://github.com/aligndottech/align-cli/pull/12",
+      "why": "owner and repo are lowercased on github.com"
+    },
+    {
+      "platform": "github",
+      "rule": "github_owner_case",
+      "a": "https://github.com/O/R/pull/12",
+      "b": "https://github.com/o/r/pull/13",
+      "same": false,
+      "key": "https://github.com/o/r/pull/12",
+      "why": "lowercasing owner and repo never merges two PRs"
+    },
+    {
+      "platform": "git",
+      "rule": "github_owner_case",
+      "a": "https://github.com/O/R/commit/0a1b2c3d4e5f",
+      "b": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "same": true,
+      "key": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "why": "a commit URL on github.com lowercases owner and repo too"
+    },
+    {
+      "platform": "git",
+      "rule": "github_owner_case",
+      "a": "https://github.com/O/R/commit/0A1B2C3D4E5F",
+      "b": "https://github.com/o/r/commit/0a1b2c3d4e5f",
+      "same": false,
+      "key": "https://github.com/o/r/commit/0A1B2C3D4E5F",
+      "why": "the sha keeps its case: only the owner and repo segments are lowercased"
+    },
+    {
+      "platform": "teams",
+      "rule": "percent_case",
+      "a": "https://teams.microsoft.com/l/message/19%3aabc%40thread.tacv2/1616965872395",
+      "b": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "same": true,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "percent-escape hex is uppercased"
+    },
+    {
+      "platform": "teams",
+      "rule": "percent_case",
+      "a": "https://teams.microsoft.com/l/message/19%3aabc%40thread.tacv2/1616965872395",
+      "b": "https://teams.microsoft.com/l/message/19%3aabd%40thread.tacv2/1616965872395",
+      "same": false,
+      "key": "https://teams.microsoft.com/l/message/19%3Aabc%40thread.tacv2/1616965872395",
+      "why": "only the escape hex changes case, so two channels stay two keys"
+    },
+    {
+      "platform": "zoom",
+      "rule": "percent_case",
+      "a": "https://zoom.us/recording/abc%2bdef%3d%3d",
+      "b": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "a meeting uuid escaped in either hex case gives one key"
+    },
+    {
+      "platform": "zoom",
+      "rule": "percent_case",
+      "a": "https://zoom.us/recording/abc%2bdef%3d%3d",
+      "b": "https://zoom.us/recording/ABC%2Bdef%3D%3D",
+      "same": false,
+      "key": "https://zoom.us/recording/abc%2Bdef%3D%3D",
+      "why": "the uuid letters themselves keep their case"
+    },
+    {
+      "platform": "notion",
+      "rule": "notion_peek",
+      "a": "https://www.notion.so/acme/fedcba9876543210fedcba9876543210?v=1111&p=0123456789abcdef0123456789abcdef&pm=s",
+      "b": "https://www.notion.so/acme/Spec-0123456789abcdef0123456789abcdef",
+      "same": true,
+      "key": "https://www.notion.so/0123456789abcdef0123456789abcdef",
+      "why": "a peek URL is keyed by its p= page id, not by the database id in the path"
+    },
+    {
+      "platform": "notion",
+      "rule": "notion_peek",
+      "a": "https://www.notion.so/acme/0123456789abcdef0123456789abcdef?v=1111&p=fedcba9876543210fedcba9876543210&pm=s",
+      "b": "https://www.notion.so/acme/0123456789abcdef0123456789abcdef?v=1111&p=0123456789abcdef0123456789abcdef&pm=s",
+      "same": false,
+      "key": "https://www.notion.so/fedcba9876543210fedcba9876543210",
+      "why": "two peeked pages in one database stay two keys"
+    },
+    {
+      "platform": "github",
+      "rule": "comment_anchor",
+      "a": "https://github.com/o/r/issues/12#issuecomment-1234",
+      "b": "https://github.com/o/r/issues/12",
+      "same": true,
+      "key": "https://github.com/o/r/issues/12",
+      "why": "a comment anchor maps to its issue, by design"
+    },
+    {
+      "platform": "github",
+      "rule": "comment_anchor",
+      "a": "https://github.com/o/r/issues/12#issuecomment-1234",
+      "b": "https://github.com/o/r/issues/13#issuecomment-1234",
+      "same": false,
+      "key": "https://github.com/o/r/issues/12",
+      "why": "the same comment id on two issues stays two keys"
+    },
+    {
+      "platform": "jira",
+      "rule": "comment_anchor",
+      "a": "https://acme.atlassian.net/browse/ALI-12?focusedCommentId=10001&page=com.atlassian.jira",
+      "b": "https://acme.atlassian.net/browse/ALI-12",
+      "same": true,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "focusedCommentId maps to its issue, by design"
+    },
+    {
+      "platform": "jira",
+      "rule": "comment_anchor",
+      "a": "https://acme.atlassian.net/browse/ALI-12?focusedCommentId=10001",
+      "b": "https://acme.atlassian.net/browse/ALI-13?focusedCommentId=10001",
+      "same": false,
+      "key": "https://acme.atlassian.net/browse/ALI-12",
+      "why": "two issues stay two keys"
+    },
+    {
+      "platform": "linear",
+      "rule": "comment_anchor",
+      "a": "https://linear.app/acme/issue/ENG-1/pick-queue#comment-ab12cd34",
+      "b": "https://linear.app/acme/issue/ENG-1",
+      "same": true,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "a Linear comment anchor maps to its issue, by design"
+    },
+    {
+      "platform": "linear",
+      "rule": "comment_anchor",
+      "a": "https://linear.app/acme/issue/ENG-1#comment-ab12cd34",
+      "b": "https://linear.app/acme/issue/ENG-2#comment-ab12cd34",
+      "same": false,
+      "key": "https://linear.app/acme/issue/ENG-1",
+      "why": "two issues stay two keys"
     }
   ]
 }

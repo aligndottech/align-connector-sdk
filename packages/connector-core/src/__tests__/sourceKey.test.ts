@@ -38,6 +38,14 @@ describe('source-key fixture table', () => {
       ...SLUG_PLATFORMS.map((p) => [p, 'slug'] as const),
       ['confluence', 'page_id'] as const,
       ['slack', 'workspace_host'] as const,
+      ['github', 'github_owner_case'] as const,
+      ['git', 'github_owner_case'] as const,
+      ['teams', 'percent_case'] as const,
+      ['zoom', 'percent_case'] as const,
+      ['notion', 'notion_peek'] as const,
+      ['github', 'comment_anchor'] as const,
+      ['jira', 'comment_anchor'] as const,
+      ['linear', 'comment_anchor'] as const,
     ];
     for (const [platform, rule] of want) {
       for (const same of [true, false]) {
@@ -50,6 +58,10 @@ describe('source-key fixture table', () => {
     // The no-key rows cover the Teams fallback and every synthetic prefix, member by member.
     const noKey = TABLE.cases.filter((c) => c.rule === 'no_key').map((c) => c.a);
     expect(noKey).toContain('https://teams.microsoft.com');
+    expect(noKey).toContain('https://teams.microsoft.com/?tenantId=t1');
+    for (const product of ['jira', 'confluence']) {
+      expect(noKey.some((a) => a.startsWith(`https://api.atlassian.com/ex/${product}/`))).toBe(true);
+    }
     for (const prefix of SYNTHETIC_SOURCE_PREFIXES) expect(noKey.some((a) => a.startsWith(prefix))).toBe(true);
   });
 
