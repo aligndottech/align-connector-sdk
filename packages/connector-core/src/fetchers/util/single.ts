@@ -99,7 +99,7 @@ export async function readJsonCapped<T>(res: {
 /**
  * A vendor's error message, safe to put in a skip or an Error: token-like runs (a vendor
  * prefix such as `lin_api_`, a `Bearer` value, or any 20+ character key-shaped run) are
- * replaced, and the rest is cut to 120 characters. A vendor can echo back part of the
+ * replaced, and the rest is cut to 120 characters in all, ellipsis included. A vendor can echo back part of the
  * request, and the request carries the stored credential.
  */
 export function vendorMessage(message: unknown): string {
@@ -110,7 +110,7 @@ export function vendorMessage(message: unknown): string {
     .replace(/[A-Za-z0-9_-]{20,}/g, '[redacted]')
     .replace(/\s+/g, ' ')
     .trim();
-  return clean.length > 120 ? `${clean.slice(0, 120)}...` : clean;
+  return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
 }
 
 export function tooLargeSkip(name: string): FetchOneResult {

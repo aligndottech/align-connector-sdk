@@ -56,7 +56,9 @@ describe('readJsonCapped', () => {
 
 describe('vendorMessage', () => {
   it('caps the length', () => {
-    expect(vendorMessage('y'.repeat(500)).length).toBeLessThanOrEqual(121);
+    const out = vendorMessage('word '.repeat(100));
+    expect(out.length).toBeLessThanOrEqual(120); // including the ellipsis
+    expect(out.endsWith('...')).toBe(true);
   });
   it.each(['lin_api_ABCDEF1234567890', 'lin_oauth_ABCDEF1234567890', 'Bearer abc.def-ghi', 'ghp_' + 'a'.repeat(36), 'A1b2C3d4E5f6G7h8I9j0K1l2'])(
     'removes the token-like string %s',
