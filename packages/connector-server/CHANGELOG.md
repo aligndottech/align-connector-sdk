@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.10.1...connector-server-v0.11.0) (2026-10-10)
+
+
+### Features
+
+* **observability:** redact URL credentials from connector OTel spans (ALI-1186) ([#41](https://github.com/aligndottech/align-connector-sdk/issues/41)) ([2a1178a](https://github.com/aligndottech/align-connector-sdk/commit/2a1178a8763ec375e748dc1e24fdd83ce67d7aeb))
+
 ## [0.10.1](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.10.0...connector-server-v0.10.1) (2026-10-10)
 
 
