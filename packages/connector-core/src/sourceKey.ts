@@ -78,6 +78,16 @@ function confluencePagePath(u: URL): string | undefined {
   return undefined;
 }
 
+/** The page id a Confluence page URL names, in either page form, else undefined. The same
+ *  reader the key uses, so `fetchOne` cannot accept a URL the key would reject. */
+export function confluencePageId(url: string): string | undefined {
+  try {
+    return confluencePagePath(new URL(url))?.split('/').pop();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The key for one item URL, or undefined when the URL cannot name one item (see the
  * module comment): a synthetic identity, a bare host, an Atlassian OAuth fallback URL,

@@ -1,13 +1,17 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
-import { providerError } from './errors.js';
+import { providerError, providerErrorText } from './errors.js';
 import { buildFetchReport } from './util/report.js';
+import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
+import { guardFetchOne, shapeSkip, statusSkip, type FetchOneResult } from './util/single.js';
+import { normaliseSourceKey } from '../sourceKey.js';
 
 interface NotionPage {
   id: string;
   url?: string;
   created_time?: string;
+  last_edited_time?: string;
   created_by?: { id?: string };
   properties?: {
     title?: { title?: Array<{ plain_text?: string }> };
@@ -61,6 +65,69 @@ function extractBlockText(block: NotionBlock): string {
   return (content?.rich_text ?? []).map((t) => t.plain_text ?? '').join('');
 }
 
+const NOTION_VERSION = '2022-06-28';
+
+function notionHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, 'Notion-Version': NOTION_VERSION, 'Content-Type': 'application/json' };
+}
+
+/**
+ * One page as an item: title, the first 50 blocks of body, the creator. The ONE mapper
+ * for the list read and `fetchOne`, so a captured page and an imported page carry
+ * identical fields. `bodyUnreadable` is set when the blocks call failed (the page is
+ * still kept, title only).
+ */
+async function notionItem(
+  page: NotionPage,
+  headers: Record<string, string>,
+  resolveUser: (id?: string) => Promise<{ name: string; email?: string } | undefined>,
+  signal?: AbortSignal,
+): Promise<{ item: FetcherItem; bodyUnreadable: boolean }> {
+  const title = extractPageTitle(page);
+  const pageUrl = page.url ?? `https://notion.so/${page.id.replace(/-/g, '')}`;
+  const author = await resolveUser(page.created_by?.id);
+  const createdAt = toIsoOrUndefined(page.created_time);
+  const updatedAt = toIsoOrUndefined(page.last_edited_time);
+  const sourceKey = normaliseSourceKey('notion', pageUrl);
+
+  let bodyText = '';
+  let bodyUnreadable = false;
+  try {
+    const blocksRes = await fetch(`https://api.notion.com/v1/blocks/${page.id}/children?page_size=50`, { headers, ...(signal ? { signal } : {}) });
+    if (blocksRes.ok) {
+      const blocks = (await blocksRes.json()) as { results: NotionBlock[] };
+      bodyText = blocks.results.map(extractBlockText).filter(Boolean).join('\n');
+    } else {
+      bodyUnreadable = true;
+    }
+  } catch (e) {
+    // A timeout belongs to the single-item read's budget, not to "body unreadable".
+    if (signal?.aborted) throw e;
+    bodyUnreadable = true;
+  }
+
+  return {
+    item: {
+      source_url: pageUrl,
+      platform: 'notion',
+      raw_text: [title, bodyText].filter(Boolean).join('\n\n').slice(0, 3000),
+      title,
+      ...(createdAt ? { created_at: createdAt } : {}),
+      ...(updatedAt ? { updated_at: updatedAt } : {}),
+      ...(sourceKey ? { source_key: sourceKey } : {}),
+      ...(author ? { author } : {}),
+    },
+    bodyUnreadable,
+  };
+}
+
+/** The 32-hex page id a Notion URL names, via the same reader as the source key. */
+function notionPageId(url: string): string | undefined {
+  const key = normaliseSourceKey('notion', url);
+  const id = key?.startsWith('https://www.notion.so/') ? key.slice('https://www.notion.so/'.length) : undefined;
+  return id && /^[0-9a-f]{32}$/.test(id) ? id : undefined;
+}
+
 /**
  * Read-only personal Notion fetcher: pages the integration can see, with body
  * text from their child blocks. Author = the page creator ("who to talk to").
@@ -68,30 +135,54 @@ function extractBlockText(block: NotionBlock): string {
  * whose blocks cannot be read is kept (title only) and counted into the report.
  */
 export class NotionFetcher implements ConnectorFetcher {
+  /**
+   * Capture one page by URL: `GET /v1/pages/{id}` plus its first 50 blocks (and the
+   * creator lookup), from the 32-hex page id the URL ends with. Never throws.
+   */
+  async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
+    const id = notionPageId(url);
+    if (!id) return shapeSkip('Notion', url, 'no page id');
+    return guardFetchOne('Notion', opts.timeoutMs, async (signal) => {
+      const headers = notionHeaders(opts.token);
+      const res = await fetch(`https://api.notion.com/v1/pages/${id}`, { headers, signal });
+      if (!res.ok) return statusSkip('Notion', res.status, await providerErrorText(res));
+      const page = (await res.json()) as NotionPage;
+      const { item } = await notionItem(page, headers, makeNotionUserResolver(headers), signal);
+      return { item };
+    });
+  }
+
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
     return (await this.fetchWithReport(opts)).items;
   }
 
   async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
-    const headers = {
-      Authorization: `Bearer ${opts.token}`,
-      'Notion-Version': '2022-06-28',
-      'Content-Type': 'application/json',
-    };
+    const headers = notionHeaders(opts.token);
     const limit = opts.limit ?? 50;
+    const window = new DescendingWindow(sinceMs(opts.since));
+    const startedAt = Date.now();
     const resolveUser = makeNotionUserResolver(headers);
     const items: FetcherItem[] = [];
     let scanned = 0;
     let bodiesUnreadable = 0;
     let cursor: string | undefined;
     let cutByLimit = false;
+    let reachedSince = false;
+    let outOfTime = false;
 
     do {
+      if (items.length > 0 && budgetSpent(startedAt, opts.timeBudgetMs)) {
+        outOfTime = true;
+        break;
+      }
       const searchRes = await fetch('https://api.notion.com/v1/search', {
         method: 'POST',
         headers,
         body: JSON.stringify({
           filter: { value: 'page', property: 'object' },
+          // Search has no date filter, so a window is newest first plus a client-side
+          // stop at `since` (https://developers.notion.com/reference/post-search).
+          sort: { timestamp: 'last_edited_time', direction: 'descending' },
           page_size: Math.min(limit - items.length, NOTION_PAGE_MAX),
           ...(cursor ? { start_cursor: cursor } : {}),
         }),
@@ -109,42 +200,28 @@ export class NotionFetcher implements ConnectorFetcher {
           break;
         }
         scanned += 1;
-        const title = extractPageTitle(page);
-        const pageUrl = page.url ?? `https://notion.so/${page.id.replace(/-/g, '')}`;
-        const author = await resolveUser(page.created_by?.id);
-        const createdAt = toIsoOrUndefined(page.created_time);
-
-        let bodyText = '';
-        try {
-          const blocksRes = await fetch(`https://api.notion.com/v1/blocks/${page.id}/children?page_size=50`, { headers });
-          if (blocksRes.ok) {
-            const blocks = (await blocksRes.json()) as { results: NotionBlock[] };
-            bodyText = blocks.results.map(extractBlockText).filter(Boolean).join('\n');
-          } else {
-            bodiesUnreadable += 1;
-          }
-        } catch {
-          bodiesUnreadable += 1;
+        const place = window.place(page.last_edited_time);
+        if (place === 'stop') {
+          reachedSince = true;
+          break;
         }
-
-        items.push({
-          source_url: pageUrl,
-          platform: 'notion',
-          raw_text: [title, bodyText].filter(Boolean).join('\n\n').slice(0, 3000),
-          title,
-          ...(createdAt ? { created_at: createdAt } : {}),
-          ...(author ? { author } : {}),
-        });
+        if (place === 'drop') continue;
+        const { item, bodyUnreadable } = await notionItem(page, headers, resolveUser);
+        if (bodyUnreadable) bodiesUnreadable += 1;
+        items.push(item);
       }
       cursor = data.has_more ? (data.next_cursor ?? undefined) : undefined;
-    } while (cursor && items.length < limit);
+    } while (cursor && items.length < limit && !reachedSince);
 
-    const skips: FetchSkip[] = [];
+    const skips: FetchSkip[] = [...window.skips('pages')];
     if (bodiesUnreadable > 0) {
       skips.push({ kind: 'error', count: bodiesUnreadable, detail: 'pages whose body could not be read (kept, title only)' });
     }
-    // No cursor left and no result the limit skipped: the search was read to its end.
-    const exhausted = cursor === undefined && !cutByLimit;
+    if (outOfTime) {
+      skips.push({ kind: 'time_budget', count: 1, detail: `page search stopped before its end (the ${opts.timeBudgetMs} ms time budget ran out)` });
+    }
+    // Read to the end, or to the first page older than `since`, with nothing the limit cut.
+    const exhausted = (reachedSince || cursor === undefined) && !cutByLimit && !outOfTime;
     return { items, report: buildFetchReport(items, { platform: 'notion', scanned, requested: limit, skips, scope: 'team', exhausted }) };
   }
 }

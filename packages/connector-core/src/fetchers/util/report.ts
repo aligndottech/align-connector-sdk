@@ -21,6 +21,7 @@ export interface FetchReportParts {
   requested?: number;
   skips: FetchSkip[];
   scope: FetchReport['scope'];
+  perScope?: FetchReport['perScope'];
   /**
    * The fetcher's own evidence that the source had nothing more: the last page was
    * short, no cursor came back, the item limit did not cut the read. False whenever

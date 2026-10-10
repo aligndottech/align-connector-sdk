@@ -42,7 +42,7 @@ export interface FetcherItem {
    * The source's own last-updated time for this item, ISO-8601 Z. It feeds
    * {@link FetchReport.highWater}, the watermark an incremental sync resumes from,
    * so the same rule as `created_at` holds: absent when the source did not say,
-   * never the fetch time. As of this version NO built-in fetcher sets it yet.
+   * never the fetch time. Built-in fetchers set it where the vendor gives one.
    */
   updated_at?: string;
   /**
@@ -52,8 +52,8 @@ export interface FetcherItem {
    * instead of adding a second. Absent where several items can share a URL, and
    * wherever normaliseSourceKey returns undefined (a synthetic or fallback URL).
    *
-   * As of this version NO built-in fetcher sets it (the per-fetcher work lands next).
-   * A consumer that wants a key today calls normaliseSourceKey on `source_url` itself.
+   * Built-in fetchers set it where the key exists; a consumer reading an item from a
+   * fetcher that does not can call normaliseSourceKey on `source_url` itself.
    */
   source_key?: string;
 }
@@ -145,9 +145,7 @@ export interface FetchReport {
    * A consumer MUST NOT advance a watermark when this is absent, even on
    * `complete: true`, and MUST NOT substitute `now()`, `created_at` or the newest
    * item's position for it. `created_at` is not an updated time: an old item edited
-   * today would sit below a watermark built from it and never be re-read. As of this
-   * version no built-in fetcher sets `updated_at`, so this is always absent and no
-   * built-in fetch can advance a watermark yet.
+   * today would sit below a watermark built from it and never be re-read.
    */
   highWater?: string;
   /** The earliest `updated_at` among the returned items. Absent like `highWater`. */
@@ -164,12 +162,36 @@ export interface FetchReport {
   /** 'yours': only the caller's own items (authored, assigned, involved). 'team':
    *  everything the token can read, other people's items included. */
   scope: 'yours' | 'team';
+  /**
+   * Items returned per named sub-scope the caller asked for (Confluence: per space key),
+   * so a multi-space read can say which space gave what. Absent where the fetcher reads
+   * one undivided scope.
+   */
+  perScope?: Record<string, number>;
 }
 
 export interface FetchResult {
   items: FetcherItem[];
   report: FetchReport;
 }
+
+/** Options for a single-item fetch. Per-provider extras (`cloudId`, `email`) ride on the
+ *  index signature, as on {@link ConnectorFetcherOptions}. */
+export interface FetchOneOptions {
+  token: string;
+  /** Wall-clock budget for the whole single fetch; default 3,000 ms. Running out is a
+   *  `time_budget` skip. */
+  timeoutMs?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Single-item fetch for capture-by-URL. Never throws for a vendor error; it reports a
+ * skip instead: `shape` for a URL this fetcher cannot read (no request is made),
+ * `auth` when the token was refused or cannot see the item, `error` for anything else
+ * the vendor failed, `time_budget` for a timeout.
+ */
+export type FetchOne = (url: string, opts: FetchOneOptions) => Promise<{ item?: FetcherItem; skip?: FetchSkip }>;
 
 export interface ConnectorFetcher {
   /** Single-shot read used by the CLI personal import. */
@@ -183,4 +205,6 @@ export interface ConnectorFetcher {
    * exactly `(await fetchWithReport(opts)).items`.
    */
   fetchWithReport?(opts: ConnectorFetcherOptions): Promise<FetchResult>;
+  /** Optional single-item read for capture-by-URL. See {@link FetchOne}. */
+  fetchOne?: FetchOne;
 }

@@ -26,6 +26,8 @@ export type {
   FetchReport,
   FetchResult,
   DecisionAuthor,
+  FetchOne,
+  FetchOneOptions,
 } from './types/fetcher.js';
 
 // Report contract helpers and the cross-surface item identity (one table, one function).

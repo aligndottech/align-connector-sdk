@@ -159,9 +159,10 @@ describe.each(EVERY_FETCHER)('$platform report contract', ({ platform, build, op
     expect(report.complete).toBe(false);
   });
 
-  it('never invents a high water: no fetcher sets updated_at yet, so it is absent', async () => {
+  it('never invents a high water: it is the latest item updated_at, and absent when no item carries one', async () => {
     const { items, report } = await build(2).fetchWithReport!({ ...opts, limit: 50 });
-    expect(items.some((i) => i.updated_at !== undefined)).toBe(false);
-    expect(report.highWater).toBeUndefined();
+    const times = items.map((i) => i.updated_at).filter((t): t is string => t !== undefined).map((t) => Date.parse(t));
+    if (times.length === 0) expect(report.highWater).toBeUndefined();
+    else expect(report.highWater).toBe(new Date(Math.max(...times)).toISOString());
   });
 });
