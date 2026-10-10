@@ -7,6 +7,7 @@ import { fetch } from 'undici';
 import { TeamsFetcher } from '../fetchers/teams.js';
 import { SlackFetcher } from '../fetchers/slack.js';
 import { NotionFetcher } from '../fetchers/notion.js';
+import { ZoomFetcher } from '../fetchers/zoom.js';
 import { FETCH_ONE_MAX_BODY_BYTES } from '../fetchers/util/single.js';
 import { buildFetchReport } from '../fetchers/util/report.js';
 import { serve } from './helpers/statusFetch.js';
@@ -208,3 +209,16 @@ describe('3. Notion: an unreadable or cut body is reported, and blocks are paged
     expect(report.skips).toContainEqual(expect.objectContaining({ kind: 'error', count: 1 }));
   });
 });
+
+describe('4. Zoom fetchOne never echoes the share or recording token', () => {
+  it.each(['https://zoom.us/rec/share/SECRETSHARETOKENabc123', 'https://acme.zoom.us/rec/play/SECRETSHARETOKENabc123?pwd=x', 'https://zoom.us/j/123?pwd=SECRETSHARETOKENabc123'])(
+    '%s',
+    async (url) => {
+      const out = await new ZoomFetcher().fetchOne(url);
+      expect(out.skip?.kind).toBe('shape');
+      expect(JSON.stringify(out)).not.toContain('SECRETSHARETOKENabc123');
+      expect(out.skip?.detail).toContain(new URL(url).origin); // it still says which site
+    },
+  );
+});
+
