@@ -416,7 +416,10 @@ export class GitHubFetcher implements ConnectorFetcher {
       if (opts.discussion === 'none' || pastDeadline(deadline, clock)) return toItem(r.row, r.kind, undefined);
       const repo = repoOf(r.row);
       if (!repo || r.row.number == null) return toItem(r.row, r.kind, '');
-      return toItem(r.row, r.kind, (await fetchDiscussion(r.kind, repo, r.row.number, headers)).text);
+      const discussion = await fetchDiscussion(r.kind, repo, r.row.number, headers);
+      // A section that failed leaves the item pending, without the partial text: the
+      // drain appends the whole discussion, so keeping part of it here would double it.
+      return toItem(r.row, r.kind, discussion.failed ? undefined : discussion.text);
     });
     return {
       items,
@@ -449,6 +452,13 @@ export class GitHubFetcher implements ConnectorFetcher {
       const row = body.value;
       const kind: ItemKind = row.pull_request ? 'pr' : 'issue';
       const discussion = await fetchDiscussion(kind, target.repo, target.n, headers, undefined, { signal });
+      if (discussion.failed) {
+        // Same rule as the list fetch: pending, no partial text. The skip says why.
+        return {
+          item: toItem(row, kind, undefined),
+          skip: { kind: 'error', count: 1, detail: 'item returned without its discussion: a comments or reviews request to GitHub failed' },
+        };
+      }
       return { item: toItem(row, kind, discussion.text) };
     } catch (err) {
       return thrownSkip('GitHub', err, timeoutMs);

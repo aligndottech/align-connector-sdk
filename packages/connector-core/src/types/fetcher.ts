@@ -187,7 +187,8 @@ export interface FetchOneOptions {
   [key: string]: unknown;
 }
 
-/** Exactly one of the two is set. */
+/** One of the two is set, except GitHub's partial read: an item whose discussion failed
+ *  comes back with `detail_pending: true` AND an `error` skip saying so. */
 export interface FetchOneResult {
   item?: FetcherItem;
   skip?: FetchSkip;
