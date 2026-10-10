@@ -222,3 +222,35 @@ describe('4. Zoom fetchOne never echoes the share or recording token', () => {
   );
 });
 
+describe('5. Zoom transcript download: zoom.us hosts only, token in a header, no redirects', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const meeting = (download_url: string) => ({
+    meetings: [{ id: 1, uuid: 'u1', topic: 't', start_time: new Date(Date.now() - 3_600_000).toISOString(), recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url }] }],
+  });
+  const VTT = 'WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nhello\n';
+
+  it.each(['https://evil.com/vtt', 'https://zoom.us.evil.com/vtt', 'http://zoom.us/vtt', 'https://u:p@zoom.us/vtt', 'https://zoom.us:8443/vtt'])(
+    'a download_url of %s is never requested, and is a counted error skip',
+    async (dl) => {
+      const { calls } = serve(mockFetch, { '/users/me/recordings': meeting(dl), [dl]: VTT });
+      const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'SECRET', daysBack: 1 });
+      expect(calls.filter((c) => c.url.startsWith(dl))).toEqual([]);
+      expect(items).toEqual([]);
+      expect(report.skips).toContainEqual({ kind: 'error', count: 1, detail: expect.stringMatching(/not on zoom\.us/) });
+    },
+  );
+
+  it.each(['https://zoom.us/rec/download/x', 'https://acme.zoom.us/rec/download/x'])('%s is read with the token in an Authorization header, never the query', async (dl) => {
+    serve(mockFetch, { '/users/me/recordings': meeting(dl), [dl]: VTT });
+    const { items } = await new ZoomFetcher().fetchWithReport({ token: 'SECRET', daysBack: 1 });
+    expect(items).toHaveLength(1);
+    const call = mockFetch.mock.calls.find(([u]) => String(u).startsWith(dl))!;
+    expect(String(call[0])).not.toContain('SECRET');
+    const init = call[1] as { headers: Record<string, string>; redirect?: string };
+    expect(init.headers.Authorization).toBe('Bearer SECRET');
+    expect(init.redirect).toBe('manual');
+  });
+});

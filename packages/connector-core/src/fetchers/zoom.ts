@@ -6,7 +6,14 @@ import { buildFetchReport, refusedRead } from './util/report.js';
 import { budgetSpent } from './util/since.js';
 import { parseWindow } from './util/time.js';
 import { normaliseSourceKey } from '../sourceKey.js';
-import { parseUrl } from './util/single.js';
+import { parseUrl, vendorUrl } from './util/single.js';
+
+/** A transcript download URL: https on zoom.us or a *.zoom.us host, else undefined. */
+function zoomDownloadUrl(raw: string): URL | undefined {
+  const host = parseUrl(raw)?.hostname.toLowerCase();
+  if (!host || (host !== 'zoom.us' && !host.endsWith('.zoom.us'))) return undefined;
+  return vendorUrl(raw, [host]);
+}
 
 interface ZoomRecordingFile {
   file_type: string;
@@ -129,6 +136,7 @@ export class ZoomFetcher implements ConnectorFetcher {
     let noTranscript = 0;
     let transcriptPending = 0;
     let unreadable = 0;
+    let offHostDownloads = 0;
     // The item limit leaving a window, a page or a meeting unread.
     let cutByLimit = false;
 
@@ -180,8 +188,15 @@ export class ZoomFetcher implements ConnectorFetcher {
           continue;
         }
 
+        // The download URL comes from the response, so it is held to the vendor rules
+        // (https, a zoom.us host, no userinfo or port) before the token is sent, and the
+        // token travels in a header, never the query, with redirects not followed.
+        if (!zoomDownloadUrl(vttFile.download_url)) {
+          offHostDownloads += 1;
+          continue;
+        }
         try {
-          const vttRes = await fetch(`${vttFile.download_url}?access_token=${opts.token}`);
+          const vttRes = await fetch(vttFile.download_url, { headers: { Authorization: `Bearer ${opts.token}` }, redirect: 'manual' });
           if (!vttRes.ok) {
             unreadable += 1;
             continue;
@@ -227,6 +242,9 @@ export class ZoomFetcher implements ConnectorFetcher {
       skips.push({ kind: 'pending', count: transcriptPending, detail: 'meetings whose transcript is not ready yet (Zoom is still processing it)' });
     }
     if (unreadable > 0) skips.push({ kind: 'error', count: unreadable, detail: 'transcripts that could not be downloaded' });
+    if (offHostDownloads > 0) {
+      skips.push({ kind: 'error', count: offHostDownloads, detail: 'transcripts whose download URL is not on zoom.us (not fetched)' });
+    }
     if (windowsOutOfTime > 0) {
       skips.push({ kind: 'time_budget', count: windowsOutOfTime, detail: `30-day windows not read (the ${opts.timeBudgetMs} ms time budget ran out)` });
     }
