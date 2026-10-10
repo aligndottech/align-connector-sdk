@@ -317,7 +317,9 @@ export class TeamsFetcher implements ConnectorFetcher {
       skips.push({ kind: 'time_budget', count: channelsOutOfTime, detail: `channels not read (the ${opts.timeBudgetMs} ms time budget ran out)` });
     }
     if (linksRefused > 0) {
-      skips.push({ kind: 'shape', count: linksRefused, detail: 'channels whose next links not on graph.microsoft.com were refused (not followed; later messages unread)' });
+      // `error`, not `shape`: later messages were left unread, and only unread kinds explain
+      // complete: false to a reader reasoning from the skips.
+      skips.push({ kind: 'error', count: linksRefused, detail: 'channels whose next links not on graph.microsoft.com were refused (not followed; later messages unread)' });
     }
     if (channelsUnreadable > 0) {
       skips.push({ kind: 'error', count: channelsUnreadable, detail: 'channels the token could not read' });

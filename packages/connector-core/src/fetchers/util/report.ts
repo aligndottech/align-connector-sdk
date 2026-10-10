@@ -23,9 +23,9 @@ export interface FetchReportParts {
   scope: FetchReport['scope'];
   perScope?: FetchReport['perScope'];
   /**
-   * The read's exclusive upper bound (`until`), ms. `highWater` is clamped to it, so an
-   * item that slipped past the bound can never move a watermark beyond the window asked
-   * for. Not copied into the report.
+   * The read's exclusive upper bound (`until`), ms. `highWater` and `oldestReached` are
+   * both clamped to it, so an item that slipped past the bound can never move a watermark
+   * beyond the window asked for. Not copied into the report.
    */
   untilMs?: number;
   /**
@@ -56,7 +56,10 @@ export function buildFetchReport(items: FetcherItem[], parts: FetchReportParts):
     if (high === undefined || ms > high) high = ms;
     if (low === undefined || ms < low) low = ms;
   }
+  // Both bounds are clamped to `until` the same way, so oldestReached can never sit above
+  // highWater and no bound reaches past the window asked for.
   if (high !== undefined && untilMs !== undefined && high > untilMs) high = untilMs;
+  if (low !== undefined && untilMs !== undefined && low > untilMs) low = untilMs;
   const complete = exhausted && !parts.skips.some((s) => INCOMPLETE_SKIP_KINDS.has(s.kind));
   return {
     ...rest,

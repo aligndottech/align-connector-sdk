@@ -7,6 +7,7 @@ import { ZoomFetcher } from '../fetchers/zoom.js';
 import { SlackFetcher } from '../fetchers/slack.js';
 import { serve } from './helpers/statusFetch.js';
 import { capOption } from '../fetchers/util/since.js';
+import { buildFetchReport } from '../fetchers/util/report.js';
 import { TeamsFetcher } from '../fetchers/teams.js';
 import { NotionFetcher } from '../fetchers/notion.js';
 import { ConfluenceFetcher } from '../fetchers/confluence.js';
@@ -249,5 +250,40 @@ describe('N4. list reads and their lookups never follow a redirect', () => {
     serve(mockFetch, { '/users/me/recordings': R302 });
     await expect(new ZoomFetcher().fetchWithReport({ token: 't', daysBack: 1 })).rejects.toThrow(/302/);
     allManual();
+  });
+});
+
+describe('N5. until clamps both report bounds; a refused Teams link is an error, not shape', () => {
+  it('oldestReached is clamped to until like highWater, so oldest never passes high', () => {
+    const until = Date.parse('2026-05-10T00:00:00Z');
+    const items = [{ source_url: 'u', platform: 'p', raw_text: 'x', updated_at: '2026-06-01T00:00:00Z' }];
+    const r = buildFetchReport(items, { platform: 'p', scanned: 1, skips: [], scope: 'team', exhausted: true, untilMs: until });
+    expect(r.highWater).toBe('2026-05-10T00:00:00.000Z');
+    expect(r.oldestReached).toBe('2026-05-10T00:00:00.000Z');
+  });
+
+  it('an item inside the window is not moved', () => {
+    const until = Date.parse('2026-05-10T00:00:00Z');
+    const items = [
+      { source_url: 'a', platform: 'p', raw_text: 'x', updated_at: '2026-05-01T00:00:00Z' },
+      { source_url: 'b', platform: 'p', raw_text: 'x', updated_at: '2026-05-05T00:00:00Z' },
+    ];
+    const r = buildFetchReport(items, { platform: 'p', scanned: 2, skips: [], scope: 'team', exhausted: true, untilMs: until });
+    expect([r.oldestReached, r.highWater]).toEqual(['2026-05-01T00:00:00.000Z', '2026-05-05T00:00:00.000Z']);
+  });
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('Teams: a refused next link is an error skip (something was left unread), and the read is not complete', async () => {
+    serve(mockFetch, {
+      '/me/joinedTeams': { value: [{ id: 'T1', displayName: 'P' }] },
+      '/teams/T1/channels': { value: [{ id: 'C', displayName: 'G' }] },
+      '/teams/T1/channels/C/messages': { value: [], '@odata.nextLink': 'https://evil.com/x' },
+    });
+    const { report } = await new TeamsFetcher().fetchWithReport({ token: 't' });
+    expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/not on graph\.microsoft\.com/) }]);
+    expect(report.complete).toBe(false);
   });
 });

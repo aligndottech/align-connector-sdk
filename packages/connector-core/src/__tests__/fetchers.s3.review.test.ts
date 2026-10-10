@@ -37,7 +37,7 @@ describe('1. Teams sends its Bearer only to graph.microsoft.com', () => {
       expect(calls.filter((c) => c.url === link)).toEqual([]);
       expect(offHost(calls)).toEqual([]);
       expect(items).toHaveLength(1); // the page already read is kept
-      expect(report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/next links? not on graph\.microsoft\.com/) }]);
+      expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/next links? not on graph\.microsoft\.com/) }]);
       expect(report.complete).toBe(false);
     },
   );

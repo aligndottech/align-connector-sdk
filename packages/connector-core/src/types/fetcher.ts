@@ -173,9 +173,13 @@ export interface FetchReport {
    * item's position for it. `created_at` is not an updated time: an old item edited
    * today would sit below a watermark built from it and never be re-read. Only items
    * that carry `updated_at` can produce one.
+   *
+   * When the read had an `until`, this is clamped to it (as is {@link oldestReached}): an
+   * item that slipped past the bound cannot move the watermark beyond the window asked for.
    */
   highWater?: string;
-  /** The earliest `updated_at` among the returned items. Absent like `highWater`. */
+  /** The earliest `updated_at` among the returned items. Absent like `highWater`, and
+   *  clamped to `until` the same way, so it never sits above `highWater`. */
   oldestReached?: string;
   /**
    * True only when the read reached the end of what it was asked for: no cap, time
