@@ -4,7 +4,7 @@ import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError, providerError, refusedBody } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip } from './util/single.js';
+import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
 /** Graph's documented maximum page for list channel messages. */
@@ -121,28 +121,37 @@ function teamsItem(msg: TeamsMessage, replies: TeamsReply[], teamName: string, c
   };
 }
 
-/** Team id, channel id and thread-root message id from a Teams message link, else undefined. */
+/** An Entra group (team) id. */
+const TEAM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A channel thread id. No `/`, `?`, `#`, backslash or whitespace can reach the path. */
+const CHANNEL_ID = /^19:[^/?#\\\s]+@thread\.(tacv2|skype)$/;
+const MESSAGE_ID = /^\d+$/;
+
+/**
+ * Team id, channel id and thread-root message id from a Teams message link, else
+ * undefined. Every id is validated against its own shape BEFORE it can reach a Graph path,
+ * and the caller still encodes each one: the ids come from text a person or agent pasted,
+ * and an unchecked `groupId=x/../../me/messages/M1` once read a private mailbox message.
+ */
 function parseMessageLink(url: string): { teamId: string; channelId: string; messageId: string; teamName?: string; channelName?: string } | undefined {
-  let u: URL;
+  const u = vendorUrl(url, ['teams.microsoft.com']);
+  if (!u) return undefined;
+  const m = /^\/l\/message\/([^/]+)\/(\d+)\/?$/.exec(u.pathname);
+  const teamId = u.searchParams.get('groupId');
+  if (!m || !teamId || !TEAM_ID.test(teamId)) return undefined;
+  let channelId: string;
   try {
-    u = new URL(url);
+    channelId = decodeURIComponent(m[1]!);
   } catch {
     return undefined;
   }
-  if (u.hostname.toLowerCase() !== 'teams.microsoft.com') return undefined;
-  const m = /^\/l\/message\/([^/]+)\/(\d+)\/?$/.exec(u.pathname);
-  const teamId = u.searchParams.get('groupId');
-  if (!m || !teamId) return undefined;
+  if (!CHANNEL_ID.test(channelId) || channelId.includes('..')) return undefined;
   // A reply's link names its thread root in parentMessageId; the thread is the item.
   const parent = u.searchParams.get('parentMessageId');
-  const messageId = parent && /^\d+$/.test(parent) ? parent : m[2]!;
-  return {
-    teamId,
-    channelId: decodeURIComponent(m[1]!),
-    messageId,
-    ...(u.searchParams.get('teamName') ? { teamName: u.searchParams.get('teamName')! } : {}),
-    ...(u.searchParams.get('channelName') ? { channelName: u.searchParams.get('channelName')! } : {}),
-  };
+  const messageId = parent && MESSAGE_ID.test(parent) ? parent : m[2]!;
+  const teamName = u.searchParams.get('teamName');
+  const channelName = u.searchParams.get('channelName');
+  return { teamId, channelId, messageId, ...(teamName ? { teamName } : {}), ...(channelName ? { channelName } : {}) };
 }
 
 /**
@@ -159,21 +168,35 @@ export class TeamsFetcher implements ConnectorFetcher {
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parseMessageLink(url);
-    if (!link) return shapeSkip(`Teams URL not readable as one item (not a channel message link with a groupId): ${url}`);
+    if (!link) return shapeSkip(`Teams URL not read: not a channel message link with a valid team and channel id: ${urlForDetail(url)}`);
+    const maxReplyPages = (opts.maxReplyPages as number | undefined) ?? TEAMS_MAX_REPLY_PAGES;
     return guardFetchOne('Teams', opts.timeoutMs, async (signal) => {
-      const base = `/teams/${link.teamId}/channels/${link.channelId}/messages/${link.messageId}`;
-      const msg = await graphGet<TeamsMessage>(base, opts.token, signal);
+      const headers = { Authorization: `Bearer ${opts.token}` };
+      const get = async <T>(pathOrNext: string): Promise<T> => {
+        // A nextLink is only followed on Graph's own host; anything else ends the read.
+        const url = pathOrNext.startsWith('https://') ? pathOrNext : `https://graph.microsoft.com/v1.0${pathOrNext}`;
+        if (!vendorUrl(url, ['graph.microsoft.com'])) throw new Error('Teams returned a next link off graph.microsoft.com');
+        return jsonOrThrow<T>(await fetch(url, fetchOneInit(headers, signal)));
+      };
+      const team = encodeURIComponent(link.teamId);
+      const channel = encodeURIComponent(link.channelId);
+      const base = `/teams/${team}/channels/${channel}/messages/${link.messageId}`;
+      const msg = await get<TeamsMessage>(base);
       const replies: TeamsReply[] = [];
       let next: string | undefined = `${base}/replies?$top=${TEAMS_PAGE_MAX}`;
-      for (let page = 0; next && page < TEAMS_MAX_REPLY_PAGES; page++) {
-        const data: { value?: TeamsReply[]; '@odata.nextLink'?: string } = await graphGet(next, opts.token, signal);
+      for (let page = 0; next && page < maxReplyPages; page++) {
+        const data: { value?: TeamsReply[]; '@odata.nextLink'?: string } = await get(next);
         replies.push(...(data.value ?? []));
         next = data['@odata.nextLink'];
       }
-      const teamName = link.teamName ?? (await graphGet<{ displayName: string }>(`/teams/${link.teamId}`, opts.token, signal)).displayName;
-      const channelName =
-        link.channelName ?? (await graphGet<{ displayName: string }>(`/teams/${link.teamId}/channels/${link.channelId}`, opts.token, signal)).displayName;
-      return { item: teamsItem(msg, replies, teamName, channelName) };
+      const teamName = link.teamName ?? (await get<{ displayName: string }>(`/teams/${team}`)).displayName;
+      const channelName = link.channelName ?? (await get<{ displayName: string }>(`/teams/${team}/channels/${channel}`)).displayName;
+      const item = teamsItem(msg, replies, teamName, channelName);
+      if (!next) return { item };
+      return {
+        item: { ...item, partial: true },
+        skips: [{ kind: 'page_cap', count: 1, detail: `thread replies cut at ${maxReplyPages} page(s) of ${TEAMS_PAGE_MAX} (raise maxReplyPages)` }],
+      };
     });
   }
 
@@ -244,8 +267,13 @@ export class TeamsFetcher implements ConnectorFetcher {
               break;
             }
             if (place === 'drop') continue;
-            if (msg['replies@odata.nextLink']) threadsRepliesCut += 1;
-            items.push(teamsItem(msg, replies, team.displayName, channel.displayName));
+            const item = teamsItem(msg, replies, team.displayName, channel.displayName);
+            if (msg['replies@odata.nextLink']) {
+              threadsRepliesCut += 1;
+              items.push({ ...item, partial: true }); // later replies not read: merge, never replace
+            } else {
+              items.push(item);
+            }
           }
           if (reachedSince || cutByLimit) break;
           next = msgs['@odata.nextLink'];

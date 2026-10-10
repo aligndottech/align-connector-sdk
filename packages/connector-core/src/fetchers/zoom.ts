@@ -5,6 +5,7 @@ import { providerError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, sinceMs } from './util/since.js';
 import { normaliseSourceKey } from '../sourceKey.js';
+import { urlForDetail } from './util/single.js';
 
 interface ZoomRecordingFile {
   file_type: string;
@@ -96,7 +97,9 @@ export class ZoomFetcher implements ConnectorFetcher {
    * token can fetch on its own, so every URL is a `shape` skip and no request is made.
    */
   async fetchOne(url: string): Promise<FetchOneResult> {
-    return { skip: { kind: 'shape', count: 1, detail: `Zoom links are not supported for single capture: ${url}` } };
+    // The link is not echoed beyond origin and path: a share link carries its passcode
+    // (`?pwd=`) in the query.
+    return { skip: { kind: 'shape', count: 1, detail: `Zoom links are not supported for single capture: ${urlForDetail(url)}` } };
   }
 
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {

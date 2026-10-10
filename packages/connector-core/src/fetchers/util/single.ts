@@ -92,12 +92,39 @@ export function urlForDetail(raw: string): string {
   return u ? `${u.protocol}//${u.host}${u.pathname}` : '(unparseable URL)';
 }
 
+/** A non-OK vendor answer inside a fetchOne run (a 3xx included: redirects are manual). */
+export class FetchOneStatusError extends Error {
+  constructor(readonly status: number) {
+    super(`HTTP ${status}`);
+    this.name = 'FetchOneStatusError';
+  }
+}
+
+/** A fetchOne response larger than {@link FETCH_ONE_MAX_BODY_BYTES}. */
+export class FetchOneTooLargeError extends Error {
+  constructor() {
+    super('response too large');
+    this.name = 'FetchOneTooLargeError';
+  }
+}
+
+/** Read a fetchOne response: non-OK throws {@link FetchOneStatusError}, an oversized
+ *  body throws {@link FetchOneTooLargeError}. The ONE body reader for the S3 fetchOnes. */
+export async function jsonOrThrow<T>(res: { ok: boolean; status: number; text(): Promise<string> }): Promise<T> {
+  if (!res.ok) throw new FetchOneStatusError(res.status);
+  const body = await readJsonCapped<T>(res);
+  if (!body.ok) throw new FetchOneTooLargeError();
+  return body.value;
+}
+
 /**
  * Run one single-item read under ONE timeout signal for the whole read (default
- * {@link FETCH_ONE_TIMEOUT_MS}), so fetchOne never throws for a vendor problem: a refused
- * token (`FetcherAuthError`, 401) is `auth`, a timeout `time_budget`, anything else
- * `error` via {@link thrownSkip}. The run receives the signal and must pass it to EVERY
- * request it makes, lookups included, or the timeout does not bound them.
+ * {@link FETCH_ONE_TIMEOUT_MS}), so fetchOne never throws for a vendor problem:
+ * a non-OK status is {@link statusSkip} (401/403 `auth`), a refused token
+ * (`FetcherAuthError`) `auth`, an oversized body {@link tooLargeSkip}, a timeout
+ * `time_budget`, anything else `error` via {@link thrownSkip}. The run receives the signal
+ * and must pass it to EVERY request it makes, lookups included, or the timeout does not
+ * bound them.
  */
 export async function guardFetchOne(
   name: string,
@@ -108,7 +135,9 @@ export async function guardFetchOne(
   try {
     return await run(AbortSignal.timeout(ms));
   } catch (e) {
-    if (e instanceof FetcherAuthError) return { skip: { kind: 'auth', count: 1, detail: `item ${name} refused to this token (HTTP 401)` } };
+    if (e instanceof FetchOneStatusError) return statusSkip(name, e.status);
+    if (e instanceof FetchOneTooLargeError) return tooLargeSkip(name);
+    if (e instanceof FetcherAuthError) return statusSkip(name, 401);
     return thrownSkip(name, e, ms);
   }
 }

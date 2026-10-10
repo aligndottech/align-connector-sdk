@@ -338,12 +338,14 @@ describe('TeamsFetcher.fetchOne', () => {
     mockFetch.mockReset();
   });
 
-  const LINK = `https://teams.microsoft.com/l/message/${encodeURIComponent(CH)}/1616989753153?groupId=T1&tenantId=x&parentMessageId=1616963377068&teamName=Platform&channelName=General`;
+  const GUID = '11111111-2222-3333-4444-555555555555';
+  const ECH = encodeURIComponent(CH);
+  const LINK = `https://teams.microsoft.com/l/message/${ECH}/1616989753153?groupId=${GUID}&tenantId=x&parentMessageId=1616963377068&teamName=Platform&channelName=General`;
 
   it('reads the thread root the link names (parentMessageId) with its replies', async () => {
     const { calls } = serve(mockFetch, {
-      [`/teams/T1/channels/${CH}/messages/1616963377068`]: { ...msg('1616963377068', after(1), 'root text'), replies: undefined },
-      [`/teams/T1/channels/${CH}/messages/1616963377068/replies`]: { value: [{ id: 'r', lastModifiedDateTime: after(0), body: { contentType: 'text', content: 'reply text' } }] },
+      [`/teams/${GUID}/channels/${ECH}/messages/1616963377068`]: { ...msg('1616963377068', after(1), 'root text'), replies: undefined },
+      [`/teams/${GUID}/channels/${ECH}/messages/1616963377068/replies`]: { value: [{ id: 'r', lastModifiedDateTime: after(0), body: { contentType: 'text', content: 'reply text' } }] },
     });
     const { item, skip } = await new TeamsFetcher().fetchOne(LINK, { token: 't' });
     expect(skip).toBeUndefined();
@@ -352,8 +354,8 @@ describe('TeamsFetcher.fetchOne', () => {
     expect(item!.raw_text).toContain('reply text');
     expect(item!.updated_at).toBe(after(0));
     expect(calls.map((c) => c.url)).toEqual([
-      `https://graph.microsoft.com/v1.0/teams/T1/channels/${CH}/messages/1616963377068`,
-      `https://graph.microsoft.com/v1.0/teams/T1/channels/${CH}/messages/1616963377068/replies?$top=50`,
+      `https://graph.microsoft.com/v1.0/teams/${GUID}/channels/${ECH}/messages/1616963377068`,
+      `https://graph.microsoft.com/v1.0/teams/${GUID}/channels/${ECH}/messages/1616963377068/replies?$top=50`,
     ]);
   });
 

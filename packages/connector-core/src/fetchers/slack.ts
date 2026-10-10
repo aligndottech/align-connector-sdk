@@ -4,7 +4,7 @@ import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip } from './util/single.js';
+import { fetchOneInit, guardFetchOne, jsonOrThrow, parseUrl, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
 /** A Slack `ok:false` answer, carrying its error code so a caller can classify it. */
@@ -25,11 +25,13 @@ async function slackGet(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const qs = new URLSearchParams(params);
-  const res = await fetch(`https://slack.com/api/${endpoint}?${qs}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    ...(signal ? { signal } : {}),
-  });
-  const data = (await res.json()) as Record<string, unknown>;
+  const url = `https://slack.com/api/${endpoint}?${qs}`;
+  const headers = { Authorization: `Bearer ${token}` };
+  // With a signal this is a fetchOne read: bounded, no redirects, capped body.
+  const data = (signal ? await jsonOrThrow(await fetch(url, fetchOneInit(headers, signal))) : await (await fetch(url, { headers })).json()) as Record<
+    string,
+    unknown
+  >;
   if (!data.ok) {
     // Slack answers HTTP 200 with ok:false and an error code; these codes are its 401.
     const code = String(data.error);
@@ -256,14 +258,12 @@ async function slackThreadItem(
 /** Channel id and thread-root ts from a message permalink, else undefined. A reply's
  *  permalink names its thread in `thread_ts`; the thread is the item. */
 function parsePermalink(url: string): { channel: string; ts: string } | undefined {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return undefined;
-  }
-  const host = u.hostname.toLowerCase();
-  if (host !== 'slack.com' && !host.endsWith('.slack.com')) return undefined;
+  // Requests go to slack.com/api whatever the link's workspace host, but the link is still
+  // held to the vendor rules (https, no userinfo or port, a slack.com host).
+  const host = parseUrl(url)?.hostname.toLowerCase();
+  if (!host || (host !== 'slack.com' && !host.endsWith('.slack.com'))) return undefined;
+  const u = vendorUrl(url, [host]);
+  if (!u) return undefined;
   const m = /^\/archives\/([A-Z0-9]+)\/p(\d{16})\/?$/.exec(u.pathname);
   if (!m) return undefined;
   const threadTs = u.searchParams.get('thread_ts');
@@ -292,7 +292,8 @@ export class SlackFetcher implements ConnectorFetcher {
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parsePermalink(url);
-    if (!link) return shapeSkip(`Slack URL not readable as one item (not a message permalink): ${url}`);
+    if (!link) return shapeSkip(`Slack URL not read: not a message permalink on a slack.com host: ${urlForDetail(url)}`);
+    const maxReplyPages = (opts.maxReplyPages as number | undefined) ?? SLACK_MAX_REPLY_PAGES;
     return guardFetchOne('Slack', opts.timeoutMs, async (signal) => {
       try {
         const info = await slackGet('conversations.info', opts.token, { channel: link.channel }, signal);
@@ -302,13 +303,17 @@ export class SlackFetcher implements ConnectorFetcher {
           opts.token,
           { channel: link.channel, ts: link.ts, limit: String(SLACK_REPLIES_PAGE_SIZE) },
           'messages',
-          SLACK_MAX_REPLY_PAGES,
+          maxReplyPages,
           () => false,
           signal,
         );
         const item = await slackThreadItem(channel, link.ts, uniqueByTs(replies.rows), makeUserResolver(opts.token, signal));
-        if (!item) return { skip: { kind: 'shape', count: 1, detail: `Slack thread has no human message (bot or system output only): ${url}` } };
-        return { item };
+        if (!item) return { skip: { kind: 'shape', count: 1, detail: `Slack thread has no human message (bot or system output only): ${urlForDetail(url)}` } };
+        if (!replies.truncated) return { item };
+        return {
+          item: { ...item, partial: true },
+          skips: [{ kind: 'page_cap', count: 1, detail: `thread replies cut at ${maxReplyPages} page(s) (raise maxReplyPages)` }],
+        };
       } catch (e) {
         if (e instanceof SlackApiError && SLACK_NO_ACCESS.has(e.code)) {
           return { skip: { kind: 'auth', count: 1, detail: `Slack token cannot read this channel (${e.code})` } };
@@ -429,7 +434,7 @@ export class SlackFetcher implements ConnectorFetcher {
               noHumanThreads += 1; // machinery, not a conversation
               continue;
             }
-            items.push(item);
+            items.push(replies.truncated ? { ...item, partial: true } : item);
           } catch {
             threadsUnreadable += 1;
           }
@@ -443,7 +448,7 @@ export class SlackFetcher implements ConnectorFetcher {
     // window. Re-read with `oldest = since`, so only replies since then come back; a
     // thread with nothing at or after `since` yields no item. Note for the consumer: the
     // item's raw_text then holds the new messages (and the root, if Slack includes it),
-    // not the whole thread, so it must not replace a stored thread's text wholesale.
+    // not the whole thread, so it is marked `partial` and must be merged, not replaced.
     const channelNames = new Map(channels.map((c) => [c.id, c.name]));
     for (let hi = 0; hi < hotThreads.length; hi++) {
       const hot = hotThreads[hi]!;
@@ -474,7 +479,7 @@ export class SlackFetcher implements ConnectorFetcher {
           noHumanThreads += 1;
           continue;
         }
-        items.push(item);
+        items.push({ ...item, partial: true }); // only the messages since `since`: merge, never replace
       } catch {
         threadsUnreadable += 1;
       }

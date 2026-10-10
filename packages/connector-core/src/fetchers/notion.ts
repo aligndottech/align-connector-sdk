@@ -4,7 +4,10 @@ import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip, statusSkip } from './util/single.js';
+import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
+
+/** Hosts a pasted Notion page URL may name. Requests go to api.notion.com regardless. */
+const NOTION_HOSTS = ['notion.so', 'www.notion.so', 'api.notion.com'] as const;
 import { normaliseSourceKey } from '../sourceKey.js';
 
 interface NotionPage {
@@ -29,23 +32,27 @@ interface NotionBlock {
 // page sized to the limit, with the cursor Notion returned never sent back.
 const NOTION_PAGE_MAX = 100;
 
-/** Resolve a Notion user id to a name (cached). Degrades to undefined on failure. */
-function makeNotionUserResolver(headers: Record<string, string>) {
+/** Resolve a Notion user id to a name (cached). Degrades to undefined on failure. With a
+ *  `signal` (fetchOne) the lookup is bounded by it, and an abort is rethrown so the
+ *  single-item read reports its timeout instead of returning an item it did not finish. */
+function makeNotionUserResolver(headers: Record<string, string>, signal?: AbortSignal) {
   const cache = new Map<string, { name: string; email?: string } | null>();
   return async (userId?: string): Promise<{ name: string; email?: string } | undefined> => {
     if (!userId) return undefined;
     if (cache.has(userId)) return cache.get(userId) ?? undefined;
     try {
-      const res = await fetch(`https://api.notion.com/v1/users/${userId}`, { headers });
+      const url = `https://api.notion.com/v1/users/${userId}`;
+      const res = signal ? await fetch(url, fetchOneInit(headers, signal)) : await fetch(url, { headers });
       if (!res.ok) {
         cache.set(userId, null);
         return undefined;
       }
-      const u = (await res.json()) as { name?: string; person?: { email?: string } };
+      const u = (signal ? await jsonOrThrow(res) : await res.json()) as { name?: string; person?: { email?: string } };
       const resolved = u.name ? { name: u.name, ...(u.person?.email ? { email: u.person.email } : {}) } : null;
       cache.set(userId, resolved);
       return resolved ?? undefined;
-    } catch {
+    } catch (e) {
+      if (signal?.aborted) throw e;
       cache.set(userId, null);
       return undefined;
     }
@@ -93,9 +100,10 @@ async function notionItem(
   let bodyText = '';
   let bodyUnreadable = false;
   try {
-    const blocksRes = await fetch(`https://api.notion.com/v1/blocks/${page.id}/children?page_size=50`, { headers, ...(signal ? { signal } : {}) });
+    const blocksUrl = `https://api.notion.com/v1/blocks/${page.id}/children?page_size=50`;
+    const blocksRes = signal ? await fetch(blocksUrl, fetchOneInit(headers, signal)) : await fetch(blocksUrl, { headers });
     if (blocksRes.ok) {
-      const blocks = (await blocksRes.json()) as { results: NotionBlock[] };
+      const blocks = (signal ? await jsonOrThrow(blocksRes) : await blocksRes.json()) as { results: NotionBlock[] };
       bodyText = blocks.results.map(extractBlockText).filter(Boolean).join('\n');
     } else {
       bodyUnreadable = true;
@@ -140,14 +148,15 @@ export class NotionFetcher implements ConnectorFetcher {
    * creator lookup), from the 32-hex page id the URL ends with. Never throws.
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
-    const id = notionPageId(url);
-    if (!id) return shapeSkip(`Notion URL not readable as one item (no page id): ${url}`);
+    // The host is checked first (https, no userinfo or port, an exact Notion host), then
+    // the page id is read from the checked URL. The request goes to api.notion.com.
+    const checked = vendorUrl(url, NOTION_HOSTS);
+    const id = checked ? notionPageId(checked.href) : undefined;
+    if (!id) return shapeSkip(`Notion URL not readable as one page (expected a notion.so page URL ending in its id): ${urlForDetail(url)}`);
     return guardFetchOne('Notion', opts.timeoutMs, async (signal) => {
       const headers = notionHeaders(opts.token);
-      const res = await fetch(`https://api.notion.com/v1/pages/${id}`, { headers, signal });
-      if (!res.ok) return statusSkip('Notion', res.status);
-      const page = (await res.json()) as NotionPage;
-      const { item } = await notionItem(page, headers, makeNotionUserResolver(headers), signal);
+      const page = await jsonOrThrow<NotionPage>(await fetch(`https://api.notion.com/v1/pages/${id}`, fetchOneInit(headers, signal)));
+      const { item } = await notionItem(page, headers, makeNotionUserResolver(headers, signal), signal);
       return { item };
     });
   }

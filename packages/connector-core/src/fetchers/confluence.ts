@@ -4,7 +4,7 @@ import { providerError } from './errors.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip, statusSkip } from './util/single.js';
+import { fetchOneInit, guardFetchOne, jsonOrThrow, parseUrl, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 import { confluencePageId, normaliseSourceKey } from '../sourceKey.js';
 
 // Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
@@ -37,23 +37,27 @@ function cursorFromNext(next: string | undefined): string | undefined {
 
 /** Resolve a Confluence accountId to a display name (cached). Degrades to undefined
  *  if the token lacks read:confluence-user or the lookup fails. */
-function makeConfluenceUserResolver(base: string, headers: Record<string, string>) {
+function makeConfluenceUserResolver(base: string, headers: Record<string, string>, signal?: AbortSignal) {
   const cache = new Map<string, { name: string; email?: string } | null>();
   return async (accountId?: string): Promise<{ name: string; email?: string } | undefined> => {
     if (!accountId) return undefined;
     if (cache.has(accountId)) return cache.get(accountId) ?? undefined;
     try {
-      const res = await fetch(`${base}/rest/api/user?accountId=${encodeURIComponent(accountId)}`, { headers });
+      const url = `${base}/rest/api/user?accountId=${encodeURIComponent(accountId)}`;
+      // With a signal (fetchOne) the lookup is bounded by the read's timeout and an abort
+      // is rethrown, so the read reports time_budget rather than finishing late.
+      const res = signal ? await fetch(url, fetchOneInit(headers, signal)) : await fetch(url, { headers });
       if (!res.ok) {
         cache.set(accountId, null);
         return undefined;
       }
-      const u = (await res.json()) as { displayName?: string; publicName?: string; email?: string };
+      const u = (signal ? await jsonOrThrow(res) : await res.json()) as { displayName?: string; publicName?: string; email?: string };
       const name = u.displayName || u.publicName;
       const resolved = name ? { name, ...(u.email ? { email: u.email } : {}) } : null;
       cache.set(accountId, resolved);
       return resolved ?? undefined;
-    } catch {
+    } catch (e) {
+      if (signal?.aborted) throw e;
       cache.set(accountId, null);
       return undefined;
     }
@@ -67,11 +71,11 @@ interface ConfluenceTarget {
 }
 
 /** OAuth (cloudId, via api.atlassian.com) or basic auth (domain + email). */
-function confluenceTarget(opts: { token: string; [key: string]: unknown }, fallbackDomain?: string): ConfluenceTarget {
+function confluenceTarget(opts: { token: string; [key: string]: unknown }): ConfluenceTarget {
   const cloudId = opts.cloudId as string | undefined;
   const siteBase = opts.siteBase as string | undefined;
   const email = opts.email as string | undefined;
-  const domain = (opts.domain as string | undefined) ?? fallbackDomain;
+  const domain = opts.domain as string | undefined;
   if (cloudId) {
     return {
       base: `https://api.atlassian.com/ex/confluence/${cloudId}/wiki`,
@@ -87,6 +91,20 @@ function confluenceTarget(opts: { token: string; [key: string]: unknown }, fallb
     },
     humanBase: `https://${domain}`,
   };
+}
+
+/**
+ * The host of the site this credential was issued for, from OPTIONS only: `siteBase`
+ * under OAuth, `domain` under basic auth. Never the pasted URL: a URL host would choose
+ * where the stored credential is sent. Undefined when the options name no site.
+ */
+function configuredSiteHost(opts: { [key: string]: unknown }): string | undefined {
+  if (opts.cloudId) {
+    const siteBase = opts.siteBase as string | undefined;
+    return siteBase ? parseUrl(siteBase)?.hostname.toLowerCase() : undefined;
+  }
+  const domain = opts.domain as string | undefined;
+  return domain ? domain.toLowerCase() : undefined;
 }
 
 /** One page as an item. The ONE mapper for the list read and `fetchOne`. */
@@ -127,15 +145,21 @@ export class ConfluenceFetcher implements ConnectorFetcher {
    * `domain` is not given. Never throws.
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
-    const id = confluencePageId(url);
-    if (!id) return shapeSkip(`Confluence URL not readable as one item (no page id): ${url}`);
-    const t = confluenceTarget(opts, new URL(url).host);
+    const site = configuredSiteHost(opts);
+    if (!site) return shapeSkip('Confluence URL not read: the options name no Confluence site (domain, or siteBase with cloudId)');
+    // The pasted URL must name exactly the configured site (https, no userinfo or port).
+    // A URL naming another site, even another atlassian.net one, would otherwise read the
+    // same page id on this credential's site.
+    const checked = vendorUrl(url, [site]);
+    const id = checked ? confluencePageId(checked.href) : undefined;
+    if (!id) return shapeSkip(`Confluence URL not read as one page on ${site}: ${urlForDetail(url)}`);
+    const t = confluenceTarget(opts);
     return guardFetchOne('Confluence', opts.timeoutMs, async (signal) => {
-      const res = await fetch(`${t.base}/api/v2/pages/${id}?body-format=storage`, { headers: t.headers, signal });
-      if (!res.ok) return statusSkip('Confluence', res.status);
-      const page = (await res.json()) as ConfluencePageV2;
+      const page = await jsonOrThrow<ConfluencePageV2>(
+        await fetch(`${t.base}/api/v2/pages/${encodeURIComponent(id)}?body-format=storage`, fetchOneInit(t.headers, signal)),
+      );
       const linkBase = page._links?.base ?? `${t.humanBase}/wiki`;
-      return { item: await confluenceItem(page, linkBase, makeConfluenceUserResolver(t.base, t.headers)) };
+      return { item: await confluenceItem(page, linkBase, makeConfluenceUserResolver(t.base, t.headers, signal)) };
     });
   }
 
@@ -160,9 +184,20 @@ export class ConfluenceFetcher implements ConnectorFetcher {
     const listings: Array<{ key?: string; path: string }> = [];
     const skips: FetchSkip[] = [];
     if (spaces && spaces.length > 0) {
-      const res = await fetch(`${base}/api/v2/spaces?keys=${spaces.map(encodeURIComponent).join(',')}&limit=250`, { headers });
-      if (!res.ok) throw await providerError('Confluence', res, { forbidden });
-      const found = ((await res.json()) as { results?: Array<{ id: string; key: string }> }).results ?? [];
+      // Paged by its cursor: a key on a later page is found, never reported missing.
+      const found: Array<{ id: string; key: string }> = [];
+      let spaceCursor: string | undefined;
+      do {
+        const res = await fetch(
+          `${base}/api/v2/spaces?keys=${spaces.map(encodeURIComponent).join(',')}&limit=250` +
+            (spaceCursor ? `&cursor=${encodeURIComponent(spaceCursor)}` : ''),
+          { headers },
+        );
+        if (!res.ok) throw await providerError('Confluence', res, { forbidden });
+        const data = (await res.json()) as { results?: Array<{ id: string; key: string }>; _links?: { next?: string } };
+        found.push(...(data.results ?? []));
+        spaceCursor = cursorFromNext(data._links?.next);
+      } while (spaceCursor);
       const byKey = new Map(found.map((sp) => [sp.key, sp.id]));
       const missing: string[] = [];
       for (const key of spaces) {

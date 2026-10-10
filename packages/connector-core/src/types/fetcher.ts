@@ -65,6 +65,14 @@ export interface FetcherItem {
    * finishes it later (GitHub: `fetchGitHubDiscussion`). Absent or false: nothing pending.
    */
   detail_pending?: boolean;
+  /**
+   * True when this item holds only PART of what its `source_url` names: a Slack hot-thread
+   * re-read (only the messages since `since`), or a thread cut at a reply cap (Slack
+   * maxReplyPages, Teams more replies than one expanded page or than fetchOne's reply cap).
+   * It shares `source_url` and `source_key` with the whole item, so a consumer must MERGE
+   * it into a stored row, never replace the stored text with it. Absent when whole.
+   */
+  partial?: boolean;
 }
 
 /**
@@ -90,6 +98,12 @@ export interface ConnectorFetcherOptions {
    * otherwise returns a mixed, undifferentiated result with no way to ask for less.
    */
   repo?: string;
+  /**
+   * Slack only: threads the caller already holds whose roots may be older than `since`;
+   * their replies since `since` are re-read. Each resulting item is `partial: true` and
+   * shares its key with the stored thread, so a consumer must MERGE it, never replace.
+   */
+  hotThreads?: Array<{ channel: string; ts: string }>;
   /**
    * Wall-clock budget for the whole read, in milliseconds. A fetcher that stops
    * because it ran out reports a `time_budget` skip, so the report says the read
@@ -199,6 +213,9 @@ export interface FetchOneOptions {
 export interface FetchOneResult {
   item?: FetcherItem;
   skip?: FetchSkip;
+  /** Only beside an `item`: what the read left out (a reply cap that fired). The item is
+   *  then `partial: true`. Absent when the item is whole. */
+  skips?: FetchSkip[];
 }
 
 /**

@@ -9,7 +9,9 @@ import { toIsoOrUndefined } from './time.js';
 export function sinceMs(since: unknown): number | undefined {
   if (since === undefined || since === null || since === '') return undefined;
   const ms = typeof since === 'string' ? Date.parse(since) : Number.NaN;
-  if (Number.isNaN(ms)) throw new Error(`since is not an ISO-8601 date: ${String(since)}`);
+  // One message for both refusals: a number (even an epoch) and a string Date.parse
+  // cannot read. ISO-8601 is what callers should send; Date.parse is what decides.
+  if (Number.isNaN(ms)) throw new Error(`since must be a date string (ISO-8601 recommended) that Date.parse can read: ${String(since)}`);
   return ms;
 }
 
