@@ -100,8 +100,10 @@ export interface ConnectorFetcherOptions {
   repo?: string;
   /**
    * Slack only: threads the caller already holds whose roots may be older than `since`;
-   * their replies since `since` are re-read. Each resulting item is `partial: true` and
-   * shares its key with the stored thread, so a consumer must MERGE it, never replace.
+   * their replies since `since` are re-read. Requires `since`: without it the read is
+   * refused (a `shape` skip, nothing read). Each resulting item is `partial: true` and
+   * shares its key with the stored thread, so a consumer must MERGE it into the stored
+   * row (append the new messages), never replace the stored text with it.
    */
   hotThreads?: Array<{ channel: string; ts: string }>;
   /**

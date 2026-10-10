@@ -354,6 +354,11 @@ export class SlackFetcher implements ConnectorFetcher {
     const latest = untilMs === undefined ? undefined : String(Math.ceil(untilMs / 1000));
     const beforeUntil = (m: SlackMessage) => untilMs === undefined || Number(m.ts) * 1000 < untilMs;
     const hotThreads = (opts.hotThreads as Array<{ channel: string; ts: string }> | undefined) ?? [];
+    // A hot-thread re-read returns only what is new since `since`; with no since there is
+    // no "new", and the whole-thread re-read it would become is what the channel walk does.
+    if (hotThreads.length > 0 && win.sinceMs === undefined) {
+      return refusedRead({ platform: 'slack', requested: limit, scope: 'team', detail: 'hotThreads needs since: nothing was read' });
+    }
 
     await slackGet('auth.test', opts.token);
 

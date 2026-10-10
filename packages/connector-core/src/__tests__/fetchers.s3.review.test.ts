@@ -254,3 +254,26 @@ describe('5. Zoom transcript download: zoom.us hosts only, token in a header, no
     expect(init.redirect).toBe('manual');
   });
 });
+
+describe('6. Slack hotThreads needs since', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockRejectedValue(new Error('no request may be made'));
+  });
+
+  it('hotThreads without since is refused before any request: a shape skip, not complete', async () => {
+    const { items, report } = await new SlackFetcher().fetchWithReport({ token: 't', hotThreads: [{ channel: 'C1', ts: '1600000000.000000' }] });
+    expect(mockFetch).toHaveBeenCalledTimes(0);
+    expect(items).toEqual([]);
+    expect(report.complete).toBe(false);
+    expect(report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/hotThreads needs since/) }]);
+  });
+
+  it('an empty hotThreads without since is not refused (positive control)', async () => {
+    mockFetch.mockReset();
+    serve(mockFetch, { 'auth.test': { ok: true }, 'conversations.list': { ok: true, channels: [] } });
+    const { report } = await new SlackFetcher().fetchWithReport({ token: 't', hotThreads: [], interChannelDelayMs: 0 });
+    expect(report.skips).toEqual([]);
+    expect(report.complete).toBe(true);
+  });
+});
