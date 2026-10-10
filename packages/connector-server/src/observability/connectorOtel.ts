@@ -20,7 +20,9 @@ import {
 } from '@opentelemetry/semantic-conventions';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
 import { trace } from '@opentelemetry/api';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import pino from 'pino';
+import { RedactingSpanProcessor } from './spanRedaction.js';
 
 export interface ConnectorOtelConfig {
   /** Service name (e.g., 'align-connector-slack') */
@@ -64,9 +66,17 @@ export function setupConnectorOtel(config: ConnectorOtelConfig): ConnectorOtelRe
 
   const sdk = new NodeSDK({
     resource,
-    traceExporter: enabled
-      ? new OTLPTraceExporter({ url: `${endpoint}/v1/traces` })
-      : undefined,
+    // Span processors, not traceExporter, is the seam RedactingSpanProcessor
+    // needs (ALI-1186): NodeSDK gives a bare traceExporter no hook to scrub
+    // through before export. Ported from services/gateway/src/observability/
+    // otelSetup.ts, which solved this exact problem for the gateway.
+    spanProcessors: enabled
+      ? [
+          new RedactingSpanProcessor(
+            new BatchSpanProcessor(new OTLPTraceExporter({ url: `${endpoint}/v1/traces` })),
+          ),
+        ]
+      : [],
     instrumentations: enabled
       ? [getNodeAutoInstrumentations({
           '@opentelemetry/instrumentation-fs': { enabled: false },
