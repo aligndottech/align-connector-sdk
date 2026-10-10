@@ -13,7 +13,7 @@ import { providerError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { type Clock, SlidingWindowLimiter, deadlineFrom, pastDeadline, realClock } from './util/pace.js';
-import { FETCH_ONE_TIMEOUT_MS, parseUrl, shapeSkip, statusSkip, thrownSkip } from './util/single.js';
+import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorUrl } from './util/single.js';
 import {
   type DaySlice,
   type GitHubSearchItem,
@@ -132,13 +132,21 @@ async function fetchSection(
   heading: string,
   withState: boolean,
   counter?: { requests: number },
-  signal?: AbortSignal,
+  oneShot?: { signal: AbortSignal },
 ): Promise<{ text: string; ok: boolean }> {
   if (counter) counter.requests += 1;
   try {
-    const res = await fetch(url, { headers, ...(signal ? { signal } : {}) });
+    // fetchOne (oneShot): no redirect is followed and the body is capped, as for its item read.
+    const res = oneShot ? await fetch(url, fetchOneInit(headers, oneShot.signal)) : await fetch(url, { headers });
     if (!res.ok) return { text: '', ok: false };
-    const entries = (await res.json()) as DiscussionEntry[];
+    let entries: DiscussionEntry[];
+    if (oneShot) {
+      const body = await readJsonCapped<DiscussionEntry[]>(res);
+      if (!body.ok) return { text: '', ok: false };
+      entries = body.value;
+    } else {
+      entries = (await res.json()) as DiscussionEntry[];
+    }
     return { text: capSection(heading, formatEntries(entries, withState)), ok: true };
   } catch {
     return { text: '', ok: false };
@@ -162,7 +170,7 @@ async function fetchDiscussion(
   n: number,
   headers: Record<string, string>,
   counter?: { requests: number },
-  signal?: AbortSignal,
+  oneShot?: { signal: AbortSignal },
 ): Promise<{ text: string; failed: boolean }> {
   const sections =
     kind === 'pr'
@@ -175,7 +183,7 @@ async function fetchDiscussion(
   let text = '';
   let failed = false;
   for (const [url, heading, withState] of sections) {
-    const out = await fetchSection(url, headers, heading, withState, counter, signal);
+    const out = await fetchSection(url, headers, heading, withState, counter, oneShot);
     text += out.text;
     if (!out.ok) failed = true;
   }
@@ -215,13 +223,21 @@ function toItem(row: GitHubSearchItem, kind: ItemKind, discussion: string | unde
   };
 }
 
-/** `owner/repo`, number and kind from a github.com PR or issue URL, else undefined. */
+/**
+ * `owner/repo`, number and kind from a PR or issue URL on github.com
+ * (`/o/r/pull/12`, `/o/r/issues/7`) or api.github.com (`/repos/o/r/pulls/12`), else
+ * undefined. The host is checked by {@link vendorUrl}; GitHub Enterprise is not read.
+ */
 function parseGitHubItemUrl(url: string): { repo: string; n: number; kind: ItemKind } | undefined {
-  const u = parseUrl(url);
-  if (!u || u.protocol !== 'https:' || u.host.toLowerCase() !== 'github.com') return undefined;
-  const m = /^\/([^/]+)\/([^/]+)\/(pull|issues)\/(\d+)(?:\/.*)?$/.exec(u.pathname);
+  const u = vendorUrl(url, ['github.com', 'api.github.com']);
+  if (!u) return undefined;
+  const seg = '([A-Za-z0-9_.-]+)';
+  const m =
+    u.hostname.toLowerCase() === 'github.com'
+      ? new RegExp(`^/${seg}/${seg}/(pull|issues)/(\\d+)(?:/.*)?$`).exec(u.pathname)
+      : new RegExp(`^/repos/${seg}/${seg}/(pulls|issues)/(\\d+)/?$`).exec(u.pathname);
   if (!m) return undefined;
-  return { repo: `${m[1]}/${m[2]}`, n: Number(m[4]), kind: m[3] === 'pull' ? 'pr' : 'issue' };
+  return { repo: `${m[1]}/${m[2]}`, n: Number(m[4]), kind: m[3] === 'issues' ? 'issue' : 'pr' };
 }
 
 export interface GitHubDiscussionOptions {
@@ -401,16 +417,19 @@ export class GitHubFetcher implements ConnectorFetcher {
     const target = parseGitHubItemUrl(url);
     if (!target) return shapeSkip('URL is not a github.com pull request or issue');
     const timeoutMs = opts.timeoutMs ?? FETCH_ONE_TIMEOUT_MS;
-    const signal = AbortSignal.timeout(timeoutMs);
     const headers = headersFor(opts.token);
+    const signal = AbortSignal.timeout(timeoutMs);
     try {
-      // The issues endpoint answers for PRs too, in the same shape search returns, so the
-      // list fetch's mapper applies unchanged (https://docs.github.com/en/rest/issues/issues#get-an-issue).
-      const res = await fetch(`${API}/repos/${target.repo}/issues/${target.n}`, { headers, signal });
+      // Built from the parsed ids on the fixed API host, never the pasted URL. The issues
+      // endpoint answers for PRs too, in the same shape search returns, so the list
+      // fetch's mapper applies unchanged (https://docs.github.com/en/rest/issues/issues#get-an-issue).
+      const res = await fetch(`${API}/repos/${target.repo}/issues/${target.n}`, fetchOneInit(headers, signal));
       if (!res.ok) return statusSkip('GitHub', res.status);
-      const row = (await res.json()) as GitHubSearchItem;
+      const body = await readJsonCapped<GitHubSearchItem>(res);
+      if (!body.ok) return tooLargeSkip('GitHub');
+      const row = body.value;
       const kind: ItemKind = row.pull_request ? 'pr' : 'issue';
-      const discussion = await fetchDiscussion(kind, target.repo, target.n, headers, undefined, signal);
+      const discussion = await fetchDiscussion(kind, target.repo, target.n, headers, undefined, { signal });
       return { item: toItem(row, kind, discussion.text) };
     } catch (err) {
       return thrownSkip('GitHub', err, timeoutMs);

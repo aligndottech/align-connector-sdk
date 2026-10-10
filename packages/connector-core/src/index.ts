@@ -58,6 +58,16 @@ export {
   type GitCommitSource,
   type GitCommitHistory,
   type GitCommit,
+  // S2
+  fetchGitHubDiscussion,
+  buildJiraJql,
+  linearRequestsPerHour,
+  type GitHubFetcherOptions,
+  type GitHubDiscussionOptions,
+  type GitHubDiscussionResult,
+  type GitLabFetcherOptions,
+  type JiraFetcherOptions,
+  type LinearFetcherOptions,
 } from './fetchers/index.js';
 
 // Utils

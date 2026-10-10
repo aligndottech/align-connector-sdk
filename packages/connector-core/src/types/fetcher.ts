@@ -42,7 +42,7 @@ export interface FetcherItem {
    * The source's own last-updated time for this item, ISO-8601 Z. It feeds
    * {@link FetchReport.highWater}, the watermark an incremental sync resumes from,
    * so the same rule as `created_at` holds: absent when the source did not say,
-   * never the fetch time. As of this version NO built-in fetcher sets it yet.
+   * never the fetch time. Set by the github, gitlab, jira and linear fetchers (S2).
    */
   updated_at?: string;
   /**
@@ -52,8 +52,8 @@ export interface FetcherItem {
    * instead of adding a second. Absent where several items can share a URL, and
    * wherever normaliseSourceKey returns undefined (a synthetic or fallback URL).
    *
-   * As of this version NO built-in fetcher sets it (the per-fetcher work lands next).
-   * A consumer that wants a key today calls normaliseSourceKey on `source_url` itself.
+   * Set by the github, gitlab, jira and linear fetchers (S2). For any other fetcher a
+   * consumer that wants a key calls normaliseSourceKey on `source_url` itself.
    */
   source_key?: string;
   /**
@@ -152,9 +152,8 @@ export interface FetchReport {
    * A consumer MUST NOT advance a watermark when this is absent, even on
    * `complete: true`, and MUST NOT substitute `now()`, `created_at` or the newest
    * item's position for it. `created_at` is not an updated time: an old item edited
-   * today would sit below a watermark built from it and never be re-read. As of this
-   * version no built-in fetcher sets `updated_at`, so this is always absent and no
-   * built-in fetch can advance a watermark yet.
+   * today would sit below a watermark built from it and never be re-read. Only the
+   * fetchers that set `updated_at` (github, gitlab, jira, linear as of S2) can produce one.
    */
   highWater?: string;
   /** The earliest `updated_at` among the returned items. Absent like `highWater`. */
