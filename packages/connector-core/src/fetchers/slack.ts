@@ -347,8 +347,12 @@ export class SlackFetcher implements ConnectorFetcher {
     if (!win.ok) return refusedRead({ platform: 'slack', requested: limit, scope: 'team', detail: win.detail });
     const sinceS = win.sinceMs === undefined ? undefined : Math.floor(win.sinceMs / 1000);
     const oldest = String(sinceS ?? Math.floor(startedAt / 1000) - daysBack * 86400);
-    // `until` is exclusive; history's `latest` bounds roots by their ts.
-    const latest = win.untilMs === undefined ? undefined : String(Math.floor(win.untilMs / 1000));
+    // `until` is exclusive. History's `latest` is rounded UP to the next whole second so a
+    // sub-second until never under-reads; every message at or after `until` (roots,
+    // replies, hot-thread replies) is then dropped here by its own ts.
+    const untilMs = win.untilMs;
+    const latest = untilMs === undefined ? undefined : String(Math.ceil(untilMs / 1000));
+    const beforeUntil = (m: SlackMessage) => untilMs === undefined || Number(m.ts) * 1000 < untilMs;
     const hotThreads = (opts.hotThreads as Array<{ channel: string; ts: string }> | undefined) ?? [];
 
     await slackGet('auth.test', opts.token);
@@ -408,8 +412,9 @@ export class SlackFetcher implements ConnectorFetcher {
         );
         channelsHistoryRead += 1;
         if (hist.truncated) historyCut += 1;
-        const threads = hist.rows.filter((m) => (m.reply_count ?? 0) >= 2);
-        shortMessages += hist.rows.length - threads.length;
+        const roots = hist.rows.filter(beforeUntil);
+        const threads = roots.filter((m) => (m.reply_count ?? 0) >= 2);
+        shortMessages += roots.length - threads.length;
 
         for (const thread of threads) {
           if (items.length >= limit) {
@@ -433,7 +438,7 @@ export class SlackFetcher implements ConnectorFetcher {
             // A truncated thread is still an item; dropping it would lose the
             // decision to protect a byte count. The truncation is reported instead.
             if (replies.truncated) repliesCut += 1;
-            const item = await slackThreadItem(channel, thread.ts, uniqueByTs(replies.rows), resolveUser);
+            const item = await slackThreadItem(channel, thread.ts, uniqueByTs(replies.rows).filter(beforeUntil), resolveUser);
             if (!item) {
               noHumanThreads += 1; // machinery, not a conversation
               continue;
@@ -475,7 +480,7 @@ export class SlackFetcher implements ConnectorFetcher {
           maxReplyPages,
         );
         if (replies.truncated) repliesCut += 1;
-        const rows = uniqueByTs(replies.rows);
+        const rows = uniqueByTs(replies.rows).filter(beforeUntil);
         if (sinceS !== undefined && !rows.some((m) => Number(m.ts) >= sinceS)) continue; // nothing new
         const channel = { id: hot.channel, name: channelNames.get(hot.channel) ?? hot.channel };
         const item = await slackThreadItem(channel, hot.ts, rows, resolveUser);
@@ -539,6 +544,7 @@ export class SlackFetcher implements ConnectorFetcher {
         requested: limit,
         skips,
         scope: 'team',
+        untilMs,
         exhausted: !cutByLimit,
       }),
     };

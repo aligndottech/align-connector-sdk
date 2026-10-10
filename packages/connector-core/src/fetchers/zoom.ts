@@ -231,7 +231,7 @@ export class ZoomFetcher implements ConnectorFetcher {
     }
     return {
       items,
-      report: buildFetchReport(items, { platform: 'zoom', scanned, requested: limit, skips, scope: 'yours', exhausted: !cutByLimit && windowsOutOfTime === 0 }),
+      report: buildFetchReport(items, { platform: 'zoom', scanned, requested: limit, skips, scope: 'yours', untilMs: win.untilMs, exhausted: !cutByLimit && windowsOutOfTime === 0 }),
     };
   }
 }

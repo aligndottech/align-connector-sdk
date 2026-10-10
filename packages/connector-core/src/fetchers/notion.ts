@@ -234,6 +234,6 @@ export class NotionFetcher implements ConnectorFetcher {
     }
     // Read to the end, or to the first page older than `since`, with nothing the limit cut.
     const exhausted = (reachedSince || cursor === undefined) && !cutByLimit && !outOfTime;
-    return { items, report: buildFetchReport(items, { platform: 'notion', scanned, requested: limit, skips, scope: 'team', exhausted }) };
+    return { items, report: buildFetchReport(items, { platform: 'notion', scanned, requested: limit, skips, scope: 'team', untilMs: win.untilMs, exhausted }) };
   }
 }

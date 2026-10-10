@@ -324,7 +324,7 @@ export class TeamsFetcher implements ConnectorFetcher {
 
     return {
       items,
-      report: buildFetchReport(items, { platform: 'teams', scanned, requested: limit, skips, scope: 'team', exhausted: !cutByLimit && linksRefused === 0 }),
+      report: buildFetchReport(items, { platform: 'teams', scanned, requested: limit, skips, scope: 'team', untilMs: win.untilMs, exhausted: !cutByLimit && linksRefused === 0 }),
     };
   }
 }

@@ -292,6 +292,7 @@ export class ConfluenceFetcher implements ConnectorFetcher {
         requested: limit,
         skips,
         scope: 'team',
+        untilMs: win.untilMs,
         exhausted: !cutByLimit && unfinished === 0,
         ...(spaces && spaces.length > 0 ? { perScope } : {}),
       }),

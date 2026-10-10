@@ -5,6 +5,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import { TeamsFetcher } from '../fetchers/teams.js';
+import { SlackFetcher } from '../fetchers/slack.js';
+import { buildFetchReport } from '../fetchers/util/report.js';
 import { serve } from './helpers/statusFetch.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
@@ -61,5 +63,87 @@ describe('1. Teams sends its Bearer only to graph.microsoft.com', () => {
     );
     expect(offHost(calls)).toEqual([]);
     expect(out.skip?.kind).toBe('error');
+  });
+});
+
+describe('2. Slack until bounds replies and hot threads; highWater never passes until', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const BASE = {
+    'auth.test': { ok: true },
+    'conversations.list': { ok: true, channels: [{ id: 'C1', name: 'g' }] },
+    'users.info': { ok: true, user: { name: 'u' } },
+  };
+  const SINCE = '2023-11-14T00:00:00Z';
+
+  it('a sub-second until rounds latest UP to the next second, so nothing before until is under-read', async () => {
+    const { calls } = serve(mockFetch, { ...BASE, 'conversations.history': { ok: true, messages: [] } });
+    await new SlackFetcher().fetchWithReport({ token: 't', since: SINCE, until: '2023-11-14T22:13:20.900Z', interChannelDelayMs: 0 });
+    const hist = new URL(calls.find((c) => c.url.includes('conversations.history'))!.url).searchParams;
+    expect(hist.get('latest')).toBe('1700000001');
+  });
+
+  it('a whole-second until is passed as is', async () => {
+    const { calls } = serve(mockFetch, { ...BASE, 'conversations.history': { ok: true, messages: [] } });
+    await new SlackFetcher().fetchWithReport({ token: 't', since: SINCE, until: '2023-11-14T22:13:20.000Z', interChannelDelayMs: 0 });
+    expect(new URL(calls.find((c) => c.url.includes('conversations.history'))!.url).searchParams.get('latest')).toBe('1700000000');
+  });
+
+  it('drops replies at or after until, and a root inside the (rounded-up) second but after until', async () => {
+    const until = '2023-11-14T22:13:20.900Z'; // 1700000000.9
+    const { calls } = serve(mockFetch, {
+      ...BASE,
+      'conversations.history': {
+        ok: true,
+        messages: [
+          { ts: '1699990000.000000', reply_count: 2, latest_reply: '1700100000.000000', user: 'U1', text: 'root' },
+          { ts: '1700000000.950000', reply_count: 2, user: 'U1', text: 'root after until' },
+        ],
+      },
+      'conversations.replies & ts=1699990000.000000': {
+        ok: true,
+        messages: [
+          { ts: '1699990000.000000', user: 'U1', text: 'root' },
+          { ts: '1699990001.000000', user: 'U1', text: 'inside' },
+          { ts: '1700100000.000000', user: 'U1', text: 'after until' },
+        ],
+      },
+      'conversations.replies & ts=1700000000.950000': { ok: true, messages: [{ ts: '1700000000.950000', user: 'U1', text: 'root after until' }, { ts: '1700000000.960000', user: 'U1', text: 'x' }] },
+    });
+    const { items, report } = await new SlackFetcher().fetchWithReport({ token: 't', since: SINCE, until, interChannelDelayMs: 0 });
+    expect(items.map((i) => i.title)).toEqual(['root']);
+    expect(items[0]!.raw_text).toContain('inside');
+    expect(items[0]!.raw_text).not.toContain('after until');
+    expect(Date.parse(report.highWater!)).toBeLessThan(Date.parse(until));
+    // The root after until is not read at all (its own ts is outside the window).
+    expect(calls.filter((c) => c.url.includes('ts=1700000000.950000'))).toEqual([]);
+  });
+
+  it('a hot thread drops replies at or after until, and yields nothing when only those were new', async () => {
+    serve(mockFetch, {
+      ...BASE,
+      'conversations.list': { ok: true, channels: [] },
+      'conversations.replies': { ok: true, messages: [{ ts: '1600000000.000000', user: 'U1', text: 'root' }, { ts: '1800000000.000000', user: 'U1', text: 'far after until' }] },
+    });
+    const { items, report } = await new SlackFetcher().fetchWithReport({
+      token: 't',
+      since: SINCE,
+      until: '2023-11-15T00:00:00Z',
+      hotThreads: [{ channel: 'C1', ts: '1600000000.000000' }],
+      interChannelDelayMs: 0,
+    });
+    expect(items).toEqual([]);
+    expect(report.highWater).toBeUndefined();
+  });
+
+  it('buildFetchReport clamps highWater to until for every connector', () => {
+    const until = Date.parse('2026-05-10T00:00:00Z');
+    const items = [{ source_url: 'u', platform: 'p', raw_text: 'x', updated_at: '2026-06-01T00:00:00Z' }];
+    const r = buildFetchReport(items, { platform: 'p', scanned: 1, skips: [], scope: 'team', exhausted: true, untilMs: until });
+    expect(r.highWater).toBe('2026-05-10T00:00:00.000Z');
+    const r2 = buildFetchReport(items, { platform: 'p', scanned: 1, skips: [], scope: 'team', exhausted: true });
+    expect(r2.highWater).toBe('2026-06-01T00:00:00.000Z');
   });
 });
