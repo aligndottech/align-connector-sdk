@@ -388,6 +388,7 @@ export class SlackFetcher implements ConnectorFetcher {
     let channelsOutOfTime = 0;
     let channelsHistoryRead = 0;
     let hotOutOfTime = 0;
+    let threadsTrimmed = 0;
     const threadsRead = new Set<string>();
     // The item limit leaving a channel or thread unread. Not a skip line (the caller set
     // the limit), but the read is not complete.
@@ -443,12 +444,17 @@ export class SlackFetcher implements ConnectorFetcher {
             // A truncated thread is still an item; dropping it would lose the
             // decision to protect a byte count. The truncation is reported instead.
             if (replies.truncated) repliesCut += 1;
-            const item = await slackThreadItem(channel, thread.ts, uniqueByTs(replies.rows).filter(beforeUntil), resolveUser);
+            const all = uniqueByTs(replies.rows);
+            const kept = all.filter(beforeUntil);
+            const item = await slackThreadItem(channel, thread.ts, kept, resolveUser);
             if (!item) {
               noHumanThreads += 1; // machinery, not a conversation
               continue;
             }
-            items.push(replies.truncated ? { ...item, partial: true } : item);
+            // Replies after `until` were left out: the item is not the whole thread.
+            const trimmed = kept.length < all.length;
+            if (trimmed) threadsTrimmed += 1;
+            items.push(replies.truncated || trimmed ? { ...item, partial: true } : item);
           } catch {
             threadsUnreadable += 1;
           }
@@ -485,7 +491,8 @@ export class SlackFetcher implements ConnectorFetcher {
           maxReplyPages,
         );
         if (replies.truncated) repliesCut += 1;
-        const rows = uniqueByTs(replies.rows).filter(beforeUntil);
+        const all = uniqueByTs(replies.rows);
+        const rows = all.filter(beforeUntil);
         if (sinceS !== undefined && !rows.some((m) => Number(m.ts) >= sinceS)) continue; // nothing new
         const channel = { id: hot.channel, name: channelNames.get(hot.channel) ?? hot.channel };
         const item = await slackThreadItem(channel, hot.ts, rows, resolveUser);
@@ -494,6 +501,7 @@ export class SlackFetcher implements ConnectorFetcher {
           continue;
         }
         items.push({ ...item, partial: true }); // only the messages since `since`: merge, never replace
+        if (rows.length < all.length) threadsTrimmed += 1;
       } catch {
         threadsUnreadable += 1;
       }
@@ -530,6 +538,10 @@ export class SlackFetcher implements ConnectorFetcher {
         count: channelsOutOfTime,
         detail: `channels not scanned (the ${Math.round(timeBudgetMs / 60_000)} minute Slack time budget ran out)`,
       });
+    }
+    if (threadsTrimmed > 0) {
+      // Not unread: those replies are outside the window asked for. The items are partial.
+      skips.push({ kind: 'shape', count: threadsTrimmed, detail: 'threads with replies after until left out (kept, partial)' });
     }
     if (hotOutOfTime > 0) {
       skips.push({ kind: 'time_budget', count: hotOutOfTime, detail: `hot threads not re-read (the ${Math.round(timeBudgetMs / 60_000)} minute Slack time budget ran out)` });

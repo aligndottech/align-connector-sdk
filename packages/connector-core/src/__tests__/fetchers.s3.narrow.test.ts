@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import { ZoomFetcher } from '../fetchers/zoom.js';
+import { SlackFetcher } from '../fetchers/slack.js';
 import { serve } from './helpers/statusFetch.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
@@ -74,5 +75,39 @@ describe('N1. Zoom transcript download follows Zoom redirects by hand, bounded',
     expect(items).toEqual([]);
     expect(downloads()).toHaveLength(3);
     expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/redirect/) }]);
+  });
+});
+
+describe('N2. Slack threads trimmed at until are partial and counted', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const BASE = {
+    'auth.test': { ok: true },
+    'conversations.list': { ok: true, channels: [{ id: 'C1', name: 'g' }] },
+    'users.info': { ok: true, user: { name: 'u' } },
+    'conversations.history': { ok: true, messages: [{ ts: '1699990000.000000', reply_count: 2, user: 'U1', text: 'root' }] },
+  };
+  const read = () => new SlackFetcher().fetchWithReport({ token: 't', since: '2023-11-14T00:00:00Z', until: '2023-11-14T22:13:20.000Z', interChannelDelayMs: 0 });
+
+  it('one reply after until: the thread item is partial and the report counts it', async () => {
+    serve(mockFetch, {
+      ...BASE,
+      'conversations.replies': { ok: true, messages: [{ ts: '1699990000.000000', user: 'U1', text: 'root' }, { ts: '1699990001.000000', user: 'U1', text: 'in' }, { ts: '1700100000.000000', user: 'U1', text: 'after' }] },
+    });
+    const { items, report } = await read();
+    expect(items[0]!.partial).toBe(true);
+    expect(report.skips).toContainEqual({ kind: 'shape', count: 1, detail: expect.stringMatching(/after until/) });
+  });
+
+  it('no reply dropped: not partial and no count', async () => {
+    serve(mockFetch, {
+      ...BASE,
+      'conversations.replies': { ok: true, messages: [{ ts: '1699990000.000000', user: 'U1', text: 'root' }, { ts: '1699990001.000000', user: 'U1', text: 'in' }] },
+    });
+    const { items, report } = await read();
+    expect(items[0]).not.toHaveProperty('partial');
+    expect(report.skips).toEqual([]);
   });
 });
