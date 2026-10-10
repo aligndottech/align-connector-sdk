@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.9.1...connector-core-v0.10.0) (2026-10-10)
+
+
+### Features
+
+* **connector-core:** honest fetch reports (complete/scope/highWater) and normaliseSourceKey ([#44](https://github.com/aligndottech/align-connector-sdk/issues/44)) ([85206fa](https://github.com/aligndottech/align-connector-sdk/commit/85206fa1449f6d754dbd746f404bfd1ab67f88c7))
+* **connector-core:** strict windows, honest reports and hardened fetchOne for Confluence, Notion, Slack, Teams, Zoom ([#47](https://github.com/aligndottech/align-connector-sdk/issues/47)) ([2bb81d1](https://github.com/aligndottech/align-connector-sdk/commit/2bb81d1b54b14d2d38d322a1733e4e9ab5557d87))
+* **connector-core:** team scope, strict since/until windows and hardened fetchOne for GitHub, GitLab, Jira, Linear ([#46](https://github.com/aligndottech/align-connector-sdk/issues/46)) ([a4412bb](https://github.com/aligndottech/align-connector-sdk/commit/a4412bbdd6c529acc71cffa92b752c409a11a91a))
+
 ## [0.9.1](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.9.0...connector-core-v0.9.1) (2026-09-29)
 
 
