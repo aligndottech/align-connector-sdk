@@ -232,6 +232,19 @@ describe('N4. list reads and their lookups never follow a redirect', () => {
     allManual();
   });
 
+  it('Slack: a 3xx whose body looks like data is still refused, never read as an answer', async () => {
+    serve(mockFetch, {
+      'auth.test': { ok: true },
+      'conversations.list': { ok: true, channels: [{ id: 'C1', name: 'a' }] },
+      'conversations.history': { ...R302, body: { ok: true, messages: [{ ts: '1.000000', reply_count: 2, user: 'U1', text: 'x' }] } },
+      'conversations.replies': { ok: true, messages: [{ ts: '1.000000', user: 'U1', text: 'x' }] },
+      'users.info': { ok: true, user: { name: 'u' } },
+    });
+    const { items, report } = await new SlackFetcher().fetchWithReport({ token: 't', interChannelDelayMs: 0 });
+    expect(items).toEqual([]);
+    expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/channels the token could not read/) }]);
+  });
+
   it('Zoom: the recordings listing', async () => {
     serve(mockFetch, { '/users/me/recordings': R302 });
     await expect(new ZoomFetcher().fetchWithReport({ token: 't', daysBack: 1 })).rejects.toThrow(/302/);
