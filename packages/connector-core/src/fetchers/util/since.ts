@@ -2,24 +2,11 @@ import type { FetchSkip } from '../../types/fetcher.js';
 import { toIsoOrUndefined } from './time.js';
 
 /**
- * `opts.since` as epoch ms, or undefined when absent. An unparseable since throws: read
- * as "no lower bound" it would fetch everything, and compared as NaN it would vacate
- * every stop condition in both directions.
- */
-export function sinceMs(since: unknown): number | undefined {
-  if (since === undefined || since === null || since === '') return undefined;
-  const ms = typeof since === 'string' ? Date.parse(since) : Number.NaN;
-  // One message for both refusals: a number (even an epoch) and a string Date.parse
-  // cannot read. ISO-8601 is what callers should send; Date.parse is what decides.
-  if (Number.isNaN(ms)) throw new Error(`since must be a date string (ISO-8601 recommended) that Date.parse can read: ${String(since)}`);
-  return ms;
-}
-
-/**
  * The client-side stop for a listing the vendor sorts newest first but cannot filter by
  * date (Confluence v2 `sort=-modified-date`, Notion search `last_edited_time` descending,
  * Teams channel messages). One writer of the rule, so three fetchers cannot disagree.
  *
+ * - At or after `until` (exclusive upper bound): drop, and keep reading; older items follow.
  * - At or after `since`: keep.
  * - Before `since`, while the order has held: stop. Everything after it is older.
  * - Before `since`, once an item arrived NEWER than the one before it: the vendor did not
@@ -37,10 +24,13 @@ export class DescendingWindow {
   private outOfOrder = 0;
   private undated = 0;
 
-  constructor(private readonly since: number | undefined) {}
+  constructor(
+    private readonly since: number | undefined,
+    private readonly until?: number,
+  ) {}
 
   place(iso: string | undefined): 'keep' | 'drop' | 'stop' {
-    if (this.since === undefined) return 'keep';
+    if (this.since === undefined && this.until === undefined) return 'keep';
     const norm = toIsoOrUndefined(iso);
     if (!norm) {
       this.undated += 1;
@@ -52,7 +42,8 @@ export class DescendingWindow {
       this.ordered = false;
     }
     this.last = ms;
-    if (ms >= this.since) return 'keep';
+    if (this.until !== undefined && ms >= this.until) return 'drop';
+    if (this.since === undefined || ms >= this.since) return 'keep';
     return this.ordered ? 'stop' : 'drop';
   }
 

@@ -2,8 +2,9 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { providerError } from './errors.js';
 import { toIsoOrUndefined } from './util/time.js';
-import { buildFetchReport } from './util/report.js';
-import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
+import { budgetSpent, DescendingWindow } from './util/since.js';
+import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, parseUrl, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 import { confluencePageId, normaliseSourceKey } from '../sourceKey.js';
 
@@ -170,7 +171,9 @@ export class ConfluenceFetcher implements ConnectorFetcher {
   async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const { base, headers, humanBase } = confluenceTarget(opts);
     const limit = opts.limit ?? 50;
-    const since = sinceMs(opts.since);
+    const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
+    if (!win.ok) return refusedRead({ platform: 'confluence', requested: limit, scope: 'team', detail: win.detail });
+
     const spaces = opts.spaces as string[] | undefined;
     const startedAt = Date.now();
     const resolveUser = makeConfluenceUserResolver(base, headers);
@@ -230,7 +233,7 @@ export class ConfluenceFetcher implements ConnectorFetcher {
         unfinished += listings.length - li;
         break;
       }
-      const order = new DescendingWindow(since);
+      const order = new DescendingWindow(win.sinceMs, win.untilMs);
       let cursor: string | undefined;
       let ended = false;
       if (listing.key) perScope[listing.key] = 0;

@@ -2,9 +2,10 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError } from './errors.js';
-import { buildFetchReport } from './util/report.js';
-import { budgetSpent, sinceMs } from './util/since.js';
-import { fetchOneInit, guardFetchOne, jsonOrThrow, parseUrl, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
+import { budgetSpent } from './util/since.js';
+import { parseWindow } from './util/time.js';
+import { fetchOneInit, guardFetchOne, jsonOrThrow, parseUrl, shapeSkip, urlForDetail, vendorMessage, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
 /** A Slack `ok:false` answer, carrying its error code so a caller can classify it. */
@@ -316,7 +317,7 @@ export class SlackFetcher implements ConnectorFetcher {
         };
       } catch (e) {
         if (e instanceof SlackApiError && SLACK_NO_ACCESS.has(e.code)) {
-          return { skip: { kind: 'auth', count: 1, detail: `Slack token cannot read this channel (${e.code})` } };
+          return { skip: { kind: 'auth', count: 1, detail: `Slack token cannot read this channel (${vendorMessage(e.code)})` } };
         }
         throw e;
       }
@@ -342,9 +343,12 @@ export class SlackFetcher implements ConnectorFetcher {
     // reply". `hotThreads` is the remedy: the caller names threads it already holds and
     // their replies since `since` are re-read below.
     // `since` wins over daysBack, which stays as the fallback window.
-    const since = sinceMs(opts.since);
-    const sinceS = since === undefined ? undefined : Math.floor(since / 1000);
+    const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
+    if (!win.ok) return refusedRead({ platform: 'slack', requested: limit, scope: 'team', detail: win.detail });
+    const sinceS = win.sinceMs === undefined ? undefined : Math.floor(win.sinceMs / 1000);
     const oldest = String(sinceS ?? Math.floor(startedAt / 1000) - daysBack * 86400);
+    // `until` is exclusive; history's `latest` bounds roots by their ts.
+    const latest = win.untilMs === undefined ? undefined : String(Math.floor(win.untilMs / 1000));
     const hotThreads = (opts.hotThreads as Array<{ channel: string; ts: string }> | undefined) ?? [];
 
     await slackGet('auth.test', opts.token);
@@ -398,7 +402,7 @@ export class SlackFetcher implements ConnectorFetcher {
         const hist = await slackPaged<SlackMessage>(
           'conversations.history',
           opts.token,
-          { channel: channel.id, oldest, limit: String(SLACK_HISTORY_PAGE_SIZE) },
+          { channel: channel.id, oldest, ...(latest ? { latest } : {}), limit: String(SLACK_HISTORY_PAGE_SIZE) },
           'messages',
           maxHistoryPages,
         );

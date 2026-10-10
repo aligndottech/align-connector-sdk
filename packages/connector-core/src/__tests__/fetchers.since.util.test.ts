@@ -1,17 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { DescendingWindow, sinceMs } from '../fetchers/util/since.js';
+import { DescendingWindow } from '../fetchers/util/since.js';
 
-describe('sinceMs', () => {
-  it('parses an ISO since to epoch ms, and absent to undefined', () => {
-    expect(sinceMs('2026-01-02T00:00:00Z')).toBe(Date.parse('2026-01-02T00:00:00Z'));
-    expect(sinceMs(undefined)).toBeUndefined();
-    expect(sinceMs('')).toBeUndefined();
-  });
-
-  it('throws on an unparseable since rather than reading everything or nothing', () => {
-    expect(() => sinceMs('last tuesday')).toThrow(/since/);
-  });
-});
+// Bounds are parsed by S2's parseWindow (fetchers.window.test.ts); this file covers the stop.
+const sinceMs = (iso: string) => Date.parse(iso);
 
 describe('DescendingWindow', () => {
   const D = '2026-05-10T00:00:00Z';

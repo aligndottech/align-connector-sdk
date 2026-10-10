@@ -13,7 +13,6 @@ import { SlackFetcher } from '../fetchers/slack.js';
 import { TeamsFetcher } from '../fetchers/teams.js';
 import { ZoomFetcher } from '../fetchers/zoom.js';
 import { FETCH_ONE_MAX_BODY_BYTES } from '../fetchers/util/single.js';
-import { sinceMs } from '../fetchers/util/since.js';
 import type { FetchOneOptions, FetchOneResult } from '../types/fetcher.js';
 import { serve } from './helpers/statusFetch.js';
 
@@ -370,12 +369,5 @@ describe('Confluence space lookup pages past 250 keys', () => {
     const { report } = await new ConfluenceFetcher().fetchWithReport({ ...OAUTH, spaces: ['ENG', 'OPS'], limit: 100 });
     expect(report.skips).toEqual([]);
     expect(report.perScope).toEqual({ ENG: 0, OPS: 0 });
-  });
-});
-
-describe('sinceMs', () => {
-  it('a numeric since is refused with a message naming what is accepted', () => {
-    expect(() => sinceMs(1_700_000_000_000)).toThrow(/since must be a date string/);
-    expect(() => sinceMs('nope')).toThrow(/since must be a date string/);
   });
 });

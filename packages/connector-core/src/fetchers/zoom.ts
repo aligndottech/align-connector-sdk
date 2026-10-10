@@ -2,8 +2,9 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
-import { buildFetchReport } from './util/report.js';
-import { budgetSpent, sinceMs } from './util/since.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
+import { budgetSpent } from './util/since.js';
+import { parseWindow } from './util/time.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { urlForDetail } from './util/single.js';
 
@@ -112,8 +113,13 @@ export class ZoomFetcher implements ConnectorFetcher {
     const uuid = opts.uuid as string | undefined;
     // `since` maps to 30-day from/to windows reaching back to the since DAY (Zoom's
     // from/to are dates); a meeting earlier that day is then dropped by its start time.
-    const since = sinceMs(opts.since);
+    const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
+    if (!win.ok) return refusedRead({ platform: 'zoom', requested: limit, scope: 'yours', detail: win.detail });
+    const since = win.sinceMs;
+    const until = win.untilMs;
     const startedAt = Date.now();
+    // The newest day to list: the until day when given, else today.
+    const endMs = until ?? startedAt;
     let windowsOutOfTime = 0;
     const pageSize = Math.min(limit, ZOOM_PAGE_MAX);
     const items: FetcherItem[] = [];
@@ -129,8 +135,8 @@ export class ZoomFetcher implements ConnectorFetcher {
     const windows: Array<{ from: string; to: string } | undefined> = uuid
       ? [undefined]
       : since !== undefined
-        ? windowsFrom(startedAt, Math.floor(since / DAY_MS) * DAY_MS)
-        : recordingWindows(startedAt, daysBack);
+        ? windowsFrom(endMs, Math.floor(since / DAY_MS) * DAY_MS)
+        : recordingWindows(endMs, daysBack);
     for (let wi = 0; wi < windows.length; wi++) {
       const window = windows[wi];
       if (items.length >= limit) {
@@ -161,6 +167,7 @@ export class ZoomFetcher implements ConnectorFetcher {
         seen.add(meeting.uuid);
         const startMs = Date.parse(meeting.start_time);
         if (since !== undefined && !Number.isNaN(startMs) && startMs < since) continue; // the since day, before since
+        if (until !== undefined && !Number.isNaN(startMs) && startMs >= until) continue; // the until day, at or after until
         scanned += 1;
         const transcripts = (meeting.recording_files ?? []).filter((f) => f.file_type === 'TRANSCRIPT');
         const vttFile = transcripts.find((f) => f.status === 'completed');

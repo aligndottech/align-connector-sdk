@@ -2,8 +2,9 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
-import { buildFetchReport } from './util/report.js';
-import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
+import { budgetSpent, DescendingWindow } from './util/since.js';
+import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 
 /** Hosts a pasted Notion page URL may name. Requests go to api.notion.com regardless. */
@@ -168,7 +169,9 @@ export class NotionFetcher implements ConnectorFetcher {
   async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const headers = notionHeaders(opts.token);
     const limit = opts.limit ?? 50;
-    const window = new DescendingWindow(sinceMs(opts.since));
+    const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
+    if (!win.ok) return refusedRead({ platform: 'notion', requested: limit, scope: 'team', detail: win.detail });
+    const window = new DescendingWindow(win.sinceMs, win.untilMs);
     const startedAt = Date.now();
     const resolveUser = makeNotionUserResolver(headers);
     const items: FetcherItem[] = [];

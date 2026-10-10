@@ -2,8 +2,9 @@ import { fetch } from 'undici';
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError, providerError, refusedBody } from './errors.js';
-import { buildFetchReport } from './util/report.js';
-import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
+import { budgetSpent, DescendingWindow } from './util/since.js';
+import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
@@ -206,7 +207,9 @@ export class TeamsFetcher implements ConnectorFetcher {
 
   async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
     const limit = opts.limit ?? 50;
-    const since = sinceMs(opts.since);
+    const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
+    if (!win.ok) return refusedRead({ platform: 'teams', requested: limit, scope: 'team', detail: win.detail });
+
     const maxPages = (opts.maxMessagePages as number | undefined) ?? TEAMS_MAX_MESSAGE_PAGES;
     const startedAt = Date.now();
     const teams = await graphGet<{ value: TeamsTeam[] }>('/me/joinedTeams', opts.token);
@@ -243,7 +246,7 @@ export class TeamsFetcher implements ConnectorFetcher {
       // (P0, docs-confirmed). The listing is sorted by reply-chain last modified, newest
       // first, and has no $filter, so the window is a client-side stop.
       let next: string | undefined = `/teams/${team.id}/channels/${channel.id}/messages?$top=${TEAMS_PAGE_MAX}&$expand=replies`;
-      const order = new DescendingWindow(since);
+      const order = new DescendingWindow(win.sinceMs, win.untilMs);
       let pages = 0;
       let reachedSince = false;
       try {
