@@ -66,3 +66,62 @@ describe.each(CASES)('%s with an unparseable window', (_name, fetcher, base) => 
     expect(report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/since|until/) }]);
   });
 });
+
+const LENIENT = ['0', '1', '32', 'foo 1', 'x 2020', '1/2', '2026-02-30', '2026-03-01T00:00:00', '2026-03-01 00:00:00', '+100000-01-01T00:00:00Z', '1969-12-31T23:59:59Z', '2101-01-01', '2026-13-01', '2026-03-01T25:00:00Z', 'March 1 2026'];
+
+describe('parseWindow is strict ISO-8601, not whatever V8 will swallow', () => {
+  it.each(LENIENT)('%j is refused as since and as until', (bad) => {
+    expect(parseWindow(bad, undefined).ok).toBe(false);
+    expect(parseWindow(undefined, bad).ok).toBe(false);
+  });
+  it.each(['2026-03-01T00:00:00Z', '2026-03-01', '2026-03-01T09:30:00+01:00', '2026-03-01T00:00:00.123Z', '2024-02-29'])('%j is accepted', (good) => {
+    expect(parseWindow(good, undefined).ok).toBe(true);
+  });
+  it('a date-only bound is that UTC day', () => {
+    expect(parseWindow('2026-03-01', undefined)).toMatchObject({ ok: true, since: '2026-03-01T00:00:00.000Z' });
+  });
+});
+
+describe.each(CASES)('%s refuses a lenient window before any request', (_name, fetcher, base) => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockRejectedValue(new Error('no request may be made'));
+  });
+  it.each(LENIENT)('since %j', async (bad) => {
+    const { report } = await fetcher.fetchWithReport!({ ...base, since: bad });
+    expect(mockFetch).toHaveBeenCalledTimes(0);
+    expect(report.complete).toBe(false);
+    expect(report.skips[0]).toMatchObject({ kind: 'shape' });
+  });
+});
+
+describe('parseWindow ordering and the future', () => {
+  it.each([
+    ['2026-04-01T00:00:00Z', '2026-03-01T00:00:00Z'],
+    ['2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'],
+  ])('until <= since (%s, %s) is refused', (since, until) => {
+    const w = parseWindow(since, until);
+    expect(w.ok).toBe(false);
+    expect((w as { detail: string }).detail).toContain('until');
+  });
+  it('a since more than a day in the future is refused; a since within a day is accepted', () => {
+    expect(parseWindow('2099-01-01', undefined).ok).toBe(false);
+    expect(parseWindow(new Date(Date.now() + 3_600_000).toISOString(), undefined).ok).toBe(true);
+  });
+});
+
+describe.each(CASES)('%s refuses an empty or future window before any request', (_name, fetcher, base) => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockRejectedValue(new Error('no request may be made'));
+  });
+  it.each([
+    [{ since: '2026-04-01T00:00:00Z', until: '2026-03-01T00:00:00Z' }],
+    [{ since: '2099-01-01T00:00:00Z' }],
+  ])('%j', async (bounds) => {
+    const { report } = await fetcher.fetchWithReport!({ ...base, ...bounds });
+    expect(mockFetch).toHaveBeenCalledTimes(0);
+    expect(report.complete).toBe(false);
+    expect(report.skips[0]).toMatchObject({ kind: 'shape' });
+  });
+});
