@@ -504,3 +504,69 @@ describe('a discussion section GitHub fails to return', () => {
     expect(out.skip).toMatchObject({ kind: 'error', count: 1, detail: expect.stringContaining('discussion') });
   });
 });
+
+describe('the discussion drain only touches items that are pending', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const itemOf = (over: Partial<FetcherItem>): FetcherItem => ({
+    source_url: 'https://github.com/o/r/issues/7',
+    platform: 'github',
+    raw_text: 'Flaky\n\nStatus: open\n\n## Comments\n[bob] (x):\nalready here',
+    title: 'Flaky',
+    ...over,
+  });
+
+  it('detail_pending:false and absent: no request, nothing returned, raw_text untouched', async () => {
+    const s = serve({});
+    const done = itemOf({ detail_pending: false });
+    const never = itemOf({});
+    const before = done.raw_text;
+    const out = await fetchGitHubDiscussion([done, never], { token: 't', maxRequests: 100 });
+    expect(s.urls).toEqual([]);
+    expect(out.items).toEqual([]);
+    expect(out.requests).toBe(0);
+    expect(done.raw_text).toBe(before);
+  });
+
+  it('a pending item is still drained, and the non-pending one beside it is not', async () => {
+    const s = serve({});
+    const out = await fetchGitHubDiscussion([itemOf({ detail_pending: true, raw_text: 'Flaky' }), itemOf({ source_url: 'https://github.com/o/r/issues/8', detail_pending: false })], {
+      token: 't',
+      maxRequests: 100,
+    });
+    expect(out.items.map((i) => i.source_url)).toEqual(['https://github.com/o/r/issues/7']);
+    expect(s.discussion()).toHaveLength(1);
+  });
+});
+
+describe('GitHub repo length and the empty repo', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it.each([`${'o'.repeat(40)}/r`, `o/${'r'.repeat(101)}`])('%j is over the owner (39) or repo (100) cap: shape skip, no search', async (repo) => {
+    const s = serve({});
+    const { report } = await new GitHubFetcher().fetchWithReport({ token: 't', repo });
+    expect(report.complete).toBe(false);
+    expect(report.skips[0]).toMatchObject({ kind: 'shape' });
+    expect(s.searches()).toHaveLength(0);
+  });
+
+  it('the longest allowed owner and repo still search', async () => {
+    const s = serve({});
+    const repo = `${'o'.repeat(39)}/${'r'.repeat(100)}`;
+    await new GitHubFetcher().fetchWithReport({ token: 't', repo });
+    expect(s.searches().length).toBeGreaterThan(0);
+    expect(s.searches().every((q) => q.includes(`repo:${repo}`))).toBe(true);
+  });
+
+  it("repo '' means no repo: the unscoped search runs, as with parseWindow's empty bounds", async () => {
+    const s = serve({});
+    const { report } = await new GitHubFetcher().fetchWithReport({ token: 't', repo: '', scope: 'team' });
+    expect(report.scope).toBe('yours');
+    expect(s.searches().length).toBeGreaterThan(0);
+    expect(s.searches().join(' ')).not.toContain('repo:');
+  });
+});

@@ -41,6 +41,10 @@ const PROJECT_KEY = /^[A-Za-z][A-Za-z0-9_]*$/;
 /** An issue key: `<PROJECT>-<number>`. */
 const ISSUE_KEY = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
+/** Search pages one read may spend. Out-of-window rows (the JQL day bounds overreach on
+ *  purpose) cost pages without counting toward `limit`, so the pages are capped too. */
+const JIRA_MAX_PAGES = 10;
+
 const DAY_MS = 86_400_000;
 const jqlDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
@@ -164,12 +168,26 @@ export class JiraFetcher implements ConnectorFetcher {
     let nextPageToken: string | undefined;
     let stopped = false;
     let first = true;
+    let pages = 0;
+    let scanned = 0;
+    const inWindow = (i: JiraIssue) => {
+      const ms = Date.parse(i.fields.updated ?? '');
+      // No readable date: keep it. The JQL already bounded the read; dropping would be silent.
+      if (Number.isNaN(ms)) return true;
+      return (win.sinceMs === undefined || ms >= win.sinceMs) && (win.untilMs === undefined || ms < win.untilMs);
+    };
     do {
       if (pastDeadline(deadline, clock)) {
         skips.push({ kind: 'time_budget', count: 1, detail: `issue read stopped at the ${opts.timeBudgetMs} ms time budget; older issues not read` });
         stopped = true;
         break;
       }
+      if (pages >= JIRA_MAX_PAGES) {
+        skips.push({ kind: 'page_cap', count: 1, detail: `issue read stopped after ${JIRA_MAX_PAGES} search pages; older issues not read` });
+        stopped = true;
+        break;
+      }
+      pages += 1;
       const body: Record<string, unknown> = {
         jql,
         maxResults: Math.min(limit - issues.length, JIRA_PAGE_MAX),
@@ -195,7 +213,9 @@ export class JiraFetcher implements ConnectorFetcher {
       }
       first = false;
       const data = (await res.json()) as { issues?: JiraIssue[]; nextPageToken?: string; isLast?: boolean };
-      issues.push(...(data.issues ?? []));
+      const got = data.issues ?? [];
+      scanned += got.length;
+      issues.push(...got.filter(inWindow));
       nextPageToken = data.isLast ? undefined : data.nextPageToken;
     } while (nextPageToken && issues.length < limit);
 
@@ -204,7 +224,7 @@ export class JiraFetcher implements ConnectorFetcher {
     const items = issues.slice(0, limit).map((issue) => toItem(issue, browseBase));
     return {
       items,
-      report: buildFetchReport(items, { platform: 'jira', scanned: issues.length, requested: limit, skips, scope: team ? 'team' : 'yours', exhausted }),
+      report: buildFetchReport(items, { platform: 'jira', scanned, requested: limit, skips, scope: team ? 'team' : 'yours', exhausted }),
     };
   }
 

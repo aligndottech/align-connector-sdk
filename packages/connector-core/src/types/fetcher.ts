@@ -68,7 +68,8 @@ export interface FetcherItem {
   /**
    * True when this item holds only PART of what its `source_url` names: a Slack hot-thread
    * re-read (only the messages since `since`), or a thread cut at a reply cap (Slack
-   * maxReplyPages, Teams more replies than one expanded page or than fetchOne's reply cap).
+   * maxReplyPages, Teams more replies than one expanded page or than fetchOne's reply cap),
+   * or a Notion page whose body could not be read or was cut at maxBlockPages.
    * It shares `source_url` and `source_key` with the whole item, so a consumer must MERGE
    * it into a stored row, never replace the stored text with it. Absent when whole.
    */

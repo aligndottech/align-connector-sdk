@@ -65,7 +65,14 @@ const MAX_SECTION_CHARS = 4000;
 const API = 'https://api.github.com';
 
 /** `owner/repo`, nothing else: it is spliced into a search query. */
-const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const REPO_NAME = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/;
+
+/** GitHub's own limits: an owner is at most 39 characters, a repository name 100. An empty
+ *  `repo` is absent, like an empty `since`. */
+function validRepo(repo: string): boolean {
+  const m = REPO_NAME.exec(repo);
+  return m !== null && m[1]!.length <= 39 && m[2]!.length <= 100;
+}
 
 function headersFor(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
@@ -271,6 +278,9 @@ export async function fetchGitHubDiscussion(items: FetcherItem[], opts: GitHubDi
   const parsed: Array<{ item: FetcherItem; repo: string; n: number; kind: ItemKind }> = [];
   let unreadable = 0;
   for (const item of items) {
+    // Not pending: its discussion is already in raw_text (or was never deferred), and
+    // appending again would double it. No request, and not counted as unreadable.
+    if (item.detail_pending !== true) continue;
     const p = parseGitHubItemUrl(item.source_url);
     if (p) parsed.push({ item, ...p });
     else unreadable += 1;
@@ -352,12 +362,12 @@ export class GitHubFetcher implements ConnectorFetcher {
 
     // `repo` goes into the search query as a qualifier, so anything but a plain
     // owner/repo (a space, a `+`, a second qualifier) would widen the search past it.
-    if (opts.repo !== undefined && !REPO_NAME.test(opts.repo)) {
+    if (opts.repo && !validRepo(opts.repo)) {
       return refusedRead({
         platform: 'github',
         requested: opts.limit ?? 100,
         scope: opts.scope === 'team' ? 'team' : 'yours',
-        detail: 'repo is not an owner/repo name (letters, digits, dot, dash, underscore); nothing was searched',
+        detail: 'repo is not an owner/repo name (letters, digits, dot, dash, underscore; owner up to 39 characters, repo up to 100); nothing was searched',
       });
     }
 
