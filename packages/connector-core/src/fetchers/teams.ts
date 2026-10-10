@@ -3,7 +3,7 @@ import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOp
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError, providerError, refusedBody } from './errors.js';
 import { buildFetchReport, refusedRead } from './util/report.js';
-import { budgetSpent, DescendingWindow } from './util/since.js';
+import { budgetSpent, capOption, DescendingWindow } from './util/since.js';
 import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
@@ -180,7 +180,7 @@ export class TeamsFetcher implements ConnectorFetcher {
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parseMessageLink(url);
     if (!link) return shapeSkip(`Teams URL not read: not a channel message link with a valid team and channel id: ${urlForDetail(url)}`);
-    const maxReplyPages = (opts.maxReplyPages as number | undefined) ?? TEAMS_MAX_REPLY_PAGES;
+    const maxReplyPages = capOption(opts.maxReplyPages, TEAMS_MAX_REPLY_PAGES);
     return guardFetchOne('Teams', opts.timeoutMs, async (signal) => {
       const headers = { Authorization: `Bearer ${opts.token}` };
       const get = async <T>(pathOrNext: string): Promise<T> => {
@@ -220,7 +220,7 @@ export class TeamsFetcher implements ConnectorFetcher {
     const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
     if (!win.ok) return refusedRead({ platform: 'teams', requested: limit, scope: 'team', detail: win.detail });
 
-    const maxPages = (opts.maxMessagePages as number | undefined) ?? TEAMS_MAX_MESSAGE_PAGES;
+    const maxPages = capOption(opts.maxMessagePages, TEAMS_MAX_MESSAGE_PAGES);
     const startedAt = Date.now();
     const teams = await graphGet<{ value: TeamsTeam[] }>('/me/joinedTeams', opts.token);
     const items: FetcherItem[] = [];

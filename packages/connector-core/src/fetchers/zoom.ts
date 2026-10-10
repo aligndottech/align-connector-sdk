@@ -35,6 +35,13 @@ interface ZoomMeeting {
 // asked for. Held constant across next_page_token requests, as Zoom requires.
 const ZOOM_PAGE_MAX = 300;
 
+// TIMEZONE UNVERIFIED: from/to are calendar dates (yyyy-mm-dd) and this code computes them
+// in UTC. Zoom's docs do not say which timezone it applies to them (the account's, the
+// user's, or UTC), and no live read has checked it. Until one does, a meeting near
+// midnight at the edge of a window may fall into the neighbouring window or outside the
+// read; the uuid dedupe and the exact since/until start-time checks below bound the
+// damage to the edge day.
+//
 // Zoom lists recordings for a from/to window at most a month wide, and with
 // neither parameter it lists only the current day. So a read walks windows back
 // through `daysBack`, newest first; a boundary day can appear in two windows,

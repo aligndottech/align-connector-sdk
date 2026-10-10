@@ -3,7 +3,7 @@ import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOp
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError } from './errors.js';
 import { buildFetchReport, refusedRead } from './util/report.js';
-import { budgetSpent } from './util/since.js';
+import { budgetSpent, capOption } from './util/since.js';
 import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, parseUrl, shapeSkip, urlForDetail, vendorMessage, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
@@ -294,7 +294,7 @@ export class SlackFetcher implements ConnectorFetcher {
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parsePermalink(url);
     if (!link) return shapeSkip(`Slack URL not read: not a message permalink on a slack.com host: ${urlForDetail(url)}`);
-    const maxReplyPages = (opts.maxReplyPages as number | undefined) ?? SLACK_MAX_REPLY_PAGES;
+    const maxReplyPages = capOption(opts.maxReplyPages, SLACK_MAX_REPLY_PAGES);
     return guardFetchOne('Slack', opts.timeoutMs, async (signal) => {
       try {
         const info = await slackGet('conversations.info', opts.token, { channel: link.channel }, signal);
@@ -334,7 +334,7 @@ export class SlackFetcher implements ConnectorFetcher {
     const delayMs = (opts.interChannelDelayMs as number | undefined) ?? 3000;
     const maxChannels = (opts.maxChannels as number | undefined) ?? SLACK_MAX_CHANNELS;
     const maxHistoryPages = (opts.maxHistoryPages as number | undefined) ?? SLACK_MAX_HISTORY_PAGES;
-    const maxReplyPages = (opts.maxReplyPages as number | undefined) ?? SLACK_MAX_REPLY_PAGES;
+    const maxReplyPages = capOption(opts.maxReplyPages, SLACK_MAX_REPLY_PAGES);
     const timeBudgetMs = (opts.timeBudgetMs as number | undefined) ?? SLACK_TIME_BUDGET_MS;
     const startedAt = Date.now();
     // `oldest` bounds conversations.history by the thread ROOT's ts, so a reply added

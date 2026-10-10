@@ -8,6 +8,7 @@ import { TeamsFetcher } from '../fetchers/teams.js';
 import { SlackFetcher } from '../fetchers/slack.js';
 import { NotionFetcher } from '../fetchers/notion.js';
 import { ZoomFetcher } from '../fetchers/zoom.js';
+import { ConfluenceFetcher } from '../fetchers/confluence.js';
 import { FETCH_ONE_MAX_BODY_BYTES } from '../fetchers/util/single.js';
 import { buildFetchReport } from '../fetchers/util/report.js';
 import { serve } from './helpers/statusFetch.js';
@@ -275,5 +276,73 @@ describe('6. Slack hotThreads needs since', () => {
     const { report } = await new SlackFetcher().fetchWithReport({ token: 't', hotThreads: [], interChannelDelayMs: 0 });
     expect(report.skips).toEqual([]);
     expect(report.complete).toBe(true);
+  });
+});
+
+/** A finite chain of `n` Graph pages at /v1.0/p<i> (route keys), the last with no next link. */
+function graphChain(n: number, firstKey: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (let i = 0; i < n; i++) {
+    const key = i === 0 ? firstKey : `/v1.0/p${i}?`;
+    out[key] = { value: [{ body: { content: `r${i}` } }], ...(i + 1 < n ? { '@odata.nextLink': `https://graph.microsoft.com/v1.0/p${i + 1}?x=1` } : {}) };
+  }
+  return out;
+}
+
+describe('7. page caps refuse nonsense values; Confluence space keys are deduped', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const slackThread = () =>
+    serve(mockFetch, {
+      'conversations.info': { ok: true, channel: { name: 'eng' } },
+      'conversations.replies': { ok: true, messages: [{ ts: '1700000000.123456', text: 'root', user: 'U1' }], response_metadata: { next_cursor: 'P1' } },
+      'conversations.replies & cursor=P1': { ok: true, messages: [{ ts: '1700000001.000000', text: 'r1', user: 'U1' }], response_metadata: { next_cursor: 'P2' } },
+      'conversations.replies & cursor=P2': { ok: true, messages: [{ ts: '1700000002.000000', text: 'r2', user: 'U1' }], response_metadata: { next_cursor: 'P3' } },
+      'conversations.replies & cursor=P3': { ok: true, messages: [{ ts: '1700000003.000000', text: 'r3', user: 'U1' }] },
+      'users.info': { ok: true, user: { name: 'ada' } },
+    });
+
+  it.each([Number.NaN, 0, -1, Number.POSITIVE_INFINITY, 'lots'])('Slack fetchOne maxReplyPages %s falls back to the default cap of 3', async (cap) => {
+    slackThread();
+    const out = await new SlackFetcher().fetchOne('https://acme.slack.com/archives/C1/p1700000000123456', { token: 't', maxReplyPages: cap });
+    expect(out.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 3 page/) }]);
+  });
+
+  it.each([Number.NaN, 0, Number.POSITIVE_INFINITY])('Teams fetchOne maxReplyPages %s falls back to the default cap', async (cap) => {
+    const G = '11111111-2222-3333-4444-555555555555';
+    let n = 0;
+    // 25 reply pages: more than the default cap of 20, and finite, so a broken cap ends.
+    serve(mockFetch, { ...graphChain(25, '/messages/1/replies'), '/messages/1': { id: '1', body: { content: 'x' } } });
+    const out = await new TeamsFetcher().fetchOne(
+      `https://teams.microsoft.com/l/message/${encodeURIComponent('19:a@thread.tacv2')}/1?groupId=${G}&teamName=a&channelName=b`,
+      { token: 't', maxReplyPages: cap },
+    );
+    n = mockFetch.mock.calls.length;
+    expect(out.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) }]);
+    expect(n).toBe(21); // the message, then exactly 20 reply pages
+  });
+
+  it('Teams list maxMessagePages NaN falls back to the default cap', async () => {
+    serve(mockFetch, {
+      '/me/joinedTeams': { value: [{ id: 'T1', displayName: 'P' }] },
+      '/teams/T1/channels': { value: [{ id: 'C', displayName: 'G' }] },
+      ...graphChain(25, '/teams/T1/channels/C/messages'),
+    });
+    const { report } = await new TeamsFetcher().fetchWithReport({ token: 't', maxMessagePages: Number.NaN });
+    expect(report.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) }]);
+  });
+
+  it('a space key given twice is looked up and read once', async () => {
+    const { calls } = serve(mockFetch, {
+      '/api/v2/spaces?keys=': { results: [{ id: '100', key: 'ENG' }] },
+      '/api/v2/spaces/100/pages': { results: [{ id: '1', title: 'A', version: { createdAt: '2026-05-05T00:00:00Z' }, _links: { webui: '/pages/1' } }], _links: {} },
+    });
+    const { items, report } = await new ConfluenceFetcher().fetchWithReport({ token: 't', cloudId: 'cid', siteBase: 'https://acme.atlassian.net', spaces: ['ENG', 'ENG'] });
+    expect(items).toHaveLength(1);
+    expect(report.perScope).toEqual({ ENG: 1 });
+    expect(calls.filter((c) => c.url.includes('/spaces/100/pages'))).toHaveLength(1);
+    expect(calls.find((c) => c.url.includes('spaces?keys='))!.url).toContain('keys=ENG&');
   });
 });

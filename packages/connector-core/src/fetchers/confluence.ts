@@ -142,8 +142,10 @@ async function confluenceItem(
 export class ConfluenceFetcher implements ConnectorFetcher {
   /**
    * Capture one page by URL: `GET /api/v2/pages/{id}?body-format=storage`, from the page
-   * id in either page URL form. Basic auth reads the site from the URL's own host when
-   * `domain` is not given. Never throws.
+   * id in either page URL form. The credential's site comes from options only (`domain`
+   * for basic auth, `siteBase` with `cloudId` for OAuth), and the URL must name exactly
+   * that site; options naming no site, or a URL on any other host, is a `shape` skip with
+   * no request. Never throws.
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const site = configuredSiteHost(opts);
@@ -174,7 +176,8 @@ export class ConfluenceFetcher implements ConnectorFetcher {
     const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
     if (!win.ok) return refusedRead({ platform: 'confluence', requested: limit, scope: 'team', detail: win.detail });
 
-    const spaces = opts.spaces as string[] | undefined;
+    // Deduped, first occurrence kept: a key given twice is looked up and read once.
+    const spaces = opts.spaces ? [...new Set(opts.spaces as string[])] : undefined;
     const startedAt = Date.now();
     const resolveUser = makeConfluenceUserResolver(base, headers);
     const forbidden =
