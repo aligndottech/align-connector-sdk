@@ -1,3 +1,5 @@
+import { redactSecrets } from './util/single.js';
+
 /**
  * Thrown by a fetcher when the provider answered 401: the credential itself was refused,
  * so re-authenticating (or pasting a fresh token) would help. Callers (the CLI) catch this
@@ -101,9 +103,10 @@ export async function providerErrorText(res: RefusedResponse): Promise<string> {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return raw.slice(0, MAX_DETAIL);
+    return redactSecrets(raw).slice(0, MAX_DETAIL);
   }
-  return (wordsOf(parsed) || raw).slice(0, MAX_DETAIL);
+  // Redact before the cut, so a token straddling the limit is not left half-visible.
+  return redactSecrets(wordsOf(parsed) || raw).slice(0, MAX_DETAIL);
 }
 
 /**

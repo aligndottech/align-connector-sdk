@@ -97,19 +97,30 @@ export async function readJsonCapped<T>(res: {
 }
 
 /**
- * A vendor's error message, safe to put in a skip or an Error: token-like runs (a vendor
- * prefix such as `lin_api_`, a `Bearer` value, or any 20+ character key-shaped run) are
- * replaced, and the rest is cut to 120 characters in all, ellipsis included. A vendor can echo back part of the
- * request, and the request carries the stored credential.
+ * Replace anything credential-shaped in vendor text: a vendor token prefix (`lin_api_`,
+ * `ghp_`, ...), a `Bearer` or `Basic` value, the value of `token=`/`key=`/`secret=`/
+ * `password=` of ANY length, a base64 run that carries `+`, `=` padding or mixed-case `/`,
+ * and any other 20+ character key-shaped run. A vendor can echo part of the request, and
+ * the request carries the stored credential.
  */
+export function redactSecrets(text: string): string {
+  return text
+    .replace(/\b(?:lin_api_|lin_oauth_|ghp_|gho_|ghs_|github_pat_|glpat-|xox[a-z]-)[A-Za-z0-9_-]*/gi, '[redacted]')
+    .replace(/\b(Bearer|Basic)\s+[^\s"',;]+/gi, '$1 [redacted]')
+    .replace(/\b(token|key|secret|password|passwd|api[_-]?key|access[_-]?token)(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s&"',;]+)/gi, '$1$2[redacted]')
+    .replace(/[A-Za-z0-9+/]{12,}={0,2}/g, (run) => {
+      const padded = run.endsWith('=');
+      const mixed = /[a-z]/.test(run) && /[A-Z]/.test(run) && /\d/.test(run);
+      return padded || run.includes('+') || (run.includes('/') && mixed) ? '[redacted]' : run;
+    })
+    .replace(/[A-Za-z0-9_-]{20,}/g, '[redacted]');
+}
+
+/** A vendor's error message, safe for a skip or an Error: {@link redactSecrets}, then cut
+ *  to 120 characters in all, ellipsis included. */
 export function vendorMessage(message: unknown): string {
   const text = typeof message === 'string' ? message : '';
-  const clean = text
-    .replace(/\b(?:lin_api_|lin_oauth_|ghp_|gho_|github_pat_|glpat-|xox[a-z]-)[A-Za-z0-9_-]*/gi, '[redacted]')
-    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
-    .replace(/[A-Za-z0-9_-]{20,}/g, '[redacted]')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const clean = redactSecrets(text).replace(/\s+/g, ' ').trim();
   return clean.length > 120 ? `${clean.slice(0, 117)}...` : clean;
 }
 

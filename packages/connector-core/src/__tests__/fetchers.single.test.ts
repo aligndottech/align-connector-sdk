@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { providerError } from '../fetchers/errors.js';
 import { FETCH_ONE_MAX_BODY_BYTES, readJsonCapped, vendorMessage } from '../fetchers/util/single.js';
 
 /** A response whose body is a real stream of `chunks`, counting how many were pulled. */
@@ -66,7 +67,41 @@ describe('vendorMessage', () => {
       expect(vendorMessage(`bad key ${tok} given`)).not.toContain(tok.slice(-8));
     },
   );
+  it.each([
+    ['bad Basic dXNlcjpwYXNzd29yZA== x', 'dXNlcjpwYXNzd29yZA'],
+    ['token=abc123def456ghi789', 'abc123'],
+    ['url?key=short&x=1', 'short'],
+    ['secret=a', 'secret=a'],
+    ['password=hunter2 given', 'hunter2'],
+    ['blob QUJDREVGR0hJSktMTU5PUA+/Zg== here', 'QUJDREVGR0hJSktMTU5PUA'],
+    ['blob aGVsbG8gd29ybGQhIQ== here', 'aGVsbG8gd29ybGQhIQ'],
+  ])('redacts secrets in %j', (input, leaked) => {
+    expect(vendorMessage(input)).not.toContain(leaked);
+  });
   it('keeps an ordinary short message', () => {
     expect(vendorMessage('Entity not found: Issue')).toBe('Entity not found: Issue');
+  });
+});
+
+describe('providerError never carries a token-shaped string', () => {
+  const refused = (status: number, body: string) => ({ ok: false, status, text: async () => body, json: async () => JSON.parse(body) }) as never;
+  const PAT = 'ghp_' + 'A'.repeat(36);
+
+  it.each([401, 403, 500])('%i: a token echoed in a JSON message is redacted', async (status) => {
+    const err = await providerError('Jira', refused(status, JSON.stringify({ message: `echo ${PAT} and Basic dXNlcjpwYXNzd29yZA== token=abc123def456` })));
+    expect(err.message).not.toContain(PAT);
+    expect(err.message).not.toContain('AAAAAAAA');
+    expect(err.message).not.toContain('dXNlcjpwYXNzd29yZA');
+    expect(err.message).not.toContain('abc123def456');
+  });
+
+  it('a raw non-JSON body is redacted the same way', async () => {
+    const err = await providerError('Jira', refused(500, `proxy said ${PAT}`));
+    expect(err.message).not.toContain(PAT);
+  });
+
+  it('an ordinary provider sentence survives', async () => {
+    const err = await providerError('Jira', refused(404, JSON.stringify({ message: 'Issue does not exist' })));
+    expect(err.message).toContain('Issue does not exist');
   });
 });
