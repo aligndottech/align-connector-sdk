@@ -132,6 +132,22 @@ describe('normaliseSourceKey', () => {
     expect(normaliseSourceKey('teams', 'https://teams.microsoft.com/l/message/CH1/m1')).toBe('https://teams.microsoft.com/l/message/CH1/m1');
   });
 
+  it('keys a zoom Discover recording by meeting_id, and a zoom chat URL not at all', () => {
+    const k = (id: string) => normaliseSourceKey('zoom', `https://zoom.us/recording/detail?meeting_id=${id}`);
+    expect(k('U1%2Fab%3D%3D')).toBe('https://zoom.us/recording/detail?meeting_id=U1%2Fab%3D%3D');
+    expect(k('U1%2Fab%3D%3D')).not.toBe(k('U2%2Fab%3D%3D'));
+    expect(k('abc')).not.toBe(k('ABC'));
+    expect(normaliseSourceKey('zoom', 'https://zoom.us/chat')).toBeUndefined();
+  });
+
+  it('keys viewpage.action?pageId= only on confluence: another platform drops the query, by design', () => {
+    const url = (id: number) => `https://acme.atlassian.net/wiki/pages/viewpage.action?pageId=${id}`;
+    expect(normaliseSourceKey('confluence', url(1))).not.toBe(normaliseSourceKey('confluence', url(2)));
+    // No other platform writes this form (the gateway and CLI send it as confluence), so
+    // there is no identity to read; the generic rule drops the query.
+    expect(normaliseSourceKey('jira', url(1))).toBe('https://acme.atlassian.net/wiki/pages/viewpage.action');
+  });
+
   it('leaves an unknown platform on the four generic rules', () => {
     expect(normaliseSourceKey('miro', 'HTTPS://Miro.com/app/board/x/?moveToWidget=1#y')).toBe('https://miro.com/app/board/x');
   });
