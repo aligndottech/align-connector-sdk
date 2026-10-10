@@ -56,6 +56,13 @@ export interface FetcherItem {
    * A consumer that wants a key today calls normaliseSourceKey on `source_url` itself.
    */
   source_key?: string;
+  /**
+   * True when the item was returned whole but its discussion (comments, reviews) was
+   * deferred: GitHub's two-tier read (`discussion: 'none'`, or a time budget that ran out
+   * before the discussion pass). The item is still complete as an item; a consumer
+   * finishes it later (GitHub: `fetchGitHubDiscussion`). Absent or false: nothing pending.
+   */
+  detail_pending?: boolean;
 }
 
 /**
@@ -171,6 +178,32 @@ export interface FetchResult {
   report: FetchReport;
 }
 
+/** Inputs to {@link FetchOne}. Per-provider extras (`cloudId`, `siteBase`, `domain`,
+ *  `email`) ride on the index signature exactly as they do for a list fetch. */
+export interface FetchOneOptions {
+  token: string;
+  /** Wall-clock limit for the whole single-item read, ms. Default 3,000. Running out is a
+   *  `time_budget` skip. */
+  timeoutMs?: number;
+  [key: string]: unknown;
+}
+
+/** Exactly one of the two is set. */
+export interface FetchOneResult {
+  item?: FetcherItem;
+  skip?: FetchSkip;
+}
+
+/**
+ * Single-item read for capture-from-URL. Built from the same item mapper the list fetch
+ * uses, so a captured item and an imported one carry identical fields. Never throws for
+ * a vendor error: 401/403 is an `auth` skip, 404 and other failures `error`, a timeout
+ * `time_budget`. A URL this fetcher does not recognise, or one on a host other than the
+ * one the token belongs to, is a `shape` skip made with NO request, so a token is never
+ * sent to a host taken from the URL.
+ */
+export type FetchOne = (url: string, opts: FetchOneOptions) => Promise<FetchOneResult>;
+
 export interface ConnectorFetcher {
   /** Single-shot read used by the CLI personal import. */
   fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]>;
@@ -183,4 +216,6 @@ export interface ConnectorFetcher {
    * exactly `(await fetchWithReport(opts)).items`.
    */
   fetchWithReport?(opts: ConnectorFetcherOptions): Promise<FetchResult>;
+  /** Optional single-item read for capture-from-URL. See {@link FetchOne}. */
+  fetchOne?: FetchOne;
 }
