@@ -17,14 +17,14 @@ const res = (body: unknown, status = 200) =>
     ReturnType<typeof fetch>
   >;
 
-const issue = (key: string) => ({
+const issue = (key: string, updated = '2026-03-04T09:00:00.000+0000') => ({
   key,
   fields: {
     summary: `Summary ${key}`,
     description: null,
     status: { name: 'Done' },
     created: '2026-03-01T09:00:00.000+0000',
-    updated: '2026-03-04T09:00:00.000+0000',
+    updated,
     reporter: { displayName: 'Ada' },
   },
 });
@@ -169,5 +169,50 @@ describe('Jira fetchOne', () => {
     const calls = serve(() => ({ body: {} }));
     expect(await new JiraFetcher().fetchOne(url, OAUTH)).toEqual({ skip: { kind: 'shape', count: 1, detail: expect.any(String) } });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('Jira client-side window', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('drops an issue updated at or after until, does not count it toward the limit, and highWater stays under until', async () => {
+    serve(() => ({
+      body: {
+        issues: [issue('ALI-3', '2026-05-02T20:00:00.000+0000'), issue('ALI-2', '2026-05-01T00:00:00.000+0000'), issue('ALI-1', '2026-04-30T10:00:00.000+0000')],
+        isLast: true,
+      },
+    }));
+    const { items, report } = await new JiraFetcher().fetchWithReport({ ...OAUTH, projects: ['ALI'], until: '2026-05-01T00:00:00Z', limit: 1 });
+    expect(items.map((i) => i.title)).toEqual(['[ALI-1] Summary ALI-1']);
+    expect(report.highWater).toBe('2026-04-30T10:00:00.000Z');
+  });
+
+  it('drops an issue updated before since', async () => {
+    serve(() => ({ body: { issues: [issue('ALI-2', '2026-04-10T00:00:00.000+0000'), issue('ALI-1', '2026-04-08T23:00:00.000+0000')], isLast: true } }));
+    const { items } = await new JiraFetcher().fetchWithReport({ ...OAUTH, projects: ['ALI'], since: '2026-04-10T00:00:00Z' });
+    expect(items).toHaveLength(1);
+  });
+
+  it('keeps reading past out-of-window rows until limit in-window rows', async () => {
+    let n = 0;
+    const calls = serve(() => {
+      n += 1;
+      return n === 1
+        ? { body: { issues: [issue('ALI-9', '2026-05-03T00:00:00.000+0000')], nextPageToken: 'p2', isLast: false } }
+        : { body: { issues: [issue('ALI-1', '2026-04-30T00:00:00.000+0000')], isLast: true } };
+    });
+    const { items } = await new JiraFetcher().fetchWithReport({ ...OAUTH, projects: ['ALI'], until: '2026-05-01T00:00:00Z', limit: 1 });
+    expect(calls).toHaveLength(2);
+    expect(items).toHaveLength(1);
+  });
+
+  it('an out-of-window tail that uses up the page budget is a page_cap skip, never complete', async () => {
+    serve(() => ({ body: { issues: [issue('ALI-9', '2026-05-03T00:00:00.000+0000')], nextPageToken: 'more', isLast: false } }));
+    const { items, report } = await new JiraFetcher().fetchWithReport({ ...OAUTH, projects: ['ALI'], until: '2026-05-01T00:00:00Z', limit: 5 });
+    expect(items).toEqual([]);
+    expect(report.complete).toBe(false);
+    expect(report.skips).toEqual([expect.objectContaining({ kind: 'page_cap' })]);
   });
 });
