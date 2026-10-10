@@ -1,0 +1,358 @@
+/**
+ * S3 review round (2026-10-10): each describe pins one finding.
+ * Synthetic vendor responses only; CI makes no live calls.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fetch } from 'undici';
+import { TeamsFetcher } from '../fetchers/teams.js';
+import { SlackFetcher } from '../fetchers/slack.js';
+import { NotionFetcher } from '../fetchers/notion.js';
+import { ZoomFetcher } from '../fetchers/zoom.js';
+import { ConfluenceFetcher } from '../fetchers/confluence.js';
+import { FETCH_ONE_MAX_BODY_BYTES } from '../fetchers/util/single.js';
+import { buildFetchReport } from '../fetchers/util/report.js';
+import { serve } from './helpers/statusFetch.js';
+
+vi.mock('undici', () => ({ fetch: vi.fn() }));
+const mockFetch = vi.mocked(fetch);
+
+const offHost = (calls: Array<{ url: string }>) => calls.filter((c) => !c.url.startsWith('https://graph.microsoft.com/'));
+
+describe('1. Teams sends its Bearer only to graph.microsoft.com', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const LIST = {
+    '/me/joinedTeams': { value: [{ id: 'T1', displayName: 'P' }] },
+    '/teams/T1/channels': { value: [{ id: 'C', displayName: 'G' }] },
+  };
+  const msg = { id: '1', lastModifiedDateTime: '2026-05-05T00:00:00Z', body: { content: 'x' }, webUrl: 'https://teams.microsoft.com/l/message/c/1' };
+
+  it.each(['https://evil.com/steal', 'https://graph.microsoft.com.evil.com/v1.0/x', 'https://user@graph.microsoft.com/v1.0/x', 'http://graph.microsoft.com/v1.0/x'])(
+    'the list read refuses next link %s: no request to it, a shape skip, not complete',
+    async (link) => {
+      const { calls } = serve(mockFetch, { ...LIST, '/teams/T1/channels/C/messages': { value: [msg], '@odata.nextLink': link }, 'evil.com': { value: [] } });
+      const { items, report } = await new TeamsFetcher().fetchWithReport({ token: 'SECRET', limit: 50 });
+      expect(calls.filter((c) => c.url === link)).toEqual([]);
+      expect(offHost(calls)).toEqual([]);
+      expect(items).toHaveLength(1); // the page already read is kept
+      expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/next links? not on graph\.microsoft\.com/) }]);
+      expect(report.complete).toBe(false);
+    },
+  );
+
+  it('the list read follows an on-host next link (positive control) and never follows redirects', async () => {
+    const { calls } = serve(mockFetch, {
+      ...LIST,
+      '/teams/T1/channels/C/messages': { value: [msg], '@odata.nextLink': 'https://graph.microsoft.com/v1.0/teams/T1/channels/C/messages?$skiptoken=P2' },
+      '/teams/T1/channels/C/messages & skiptoken=P2': { value: [] },
+    });
+    const { report } = await new TeamsFetcher().fetchWithReport({ token: 'SECRET', limit: 50 });
+    expect(calls.some((c) => c.url.includes('skiptoken=P2'))).toBe(true);
+    expect(report.complete).toBe(true);
+    for (const [, init] of mockFetch.mock.calls) expect((init as { redirect?: string }).redirect).toBe('manual');
+  });
+
+  it('fetchOne refuses an off-host replies next link: no request to it, an error skip', async () => {
+    const G = '11111111-2222-3333-4444-555555555555';
+    const { calls } = serve(mockFetch, {
+      '/messages/1/replies': { value: [], '@odata.nextLink': 'https://evil.com/steal' },
+      '/messages/1': { id: '1', body: { content: 'x' } },
+      'evil.com': { value: [] },
+    });
+    const out = await new TeamsFetcher().fetchOne(
+      `https://teams.microsoft.com/l/message/${encodeURIComponent('19:a@thread.tacv2')}/1?groupId=${G}&teamName=a&channelName=b`,
+      { token: 'SECRET' },
+    );
+    expect(offHost(calls)).toEqual([]);
+    expect(out.skip?.kind).toBe('error');
+  });
+});
+
+describe('2. Slack until bounds replies and hot threads; highWater never passes until', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const BASE = {
+    'auth.test': { ok: true },
+    'conversations.list': { ok: true, channels: [{ id: 'C1', name: 'g' }] },
+    'users.info': { ok: true, user: { name: 'u' } },
+  };
+  const SINCE = '2023-11-14T00:00:00Z';
+
+  it('a sub-second until rounds latest UP to the next second, so nothing before until is under-read', async () => {
+    const { calls } = serve(mockFetch, { ...BASE, 'conversations.history': { ok: true, messages: [] } });
+    await new SlackFetcher().fetchWithReport({ token: 't', since: SINCE, until: '2023-11-14T22:13:20.900Z', interChannelDelayMs: 0 });
+    const hist = new URL(calls.find((c) => c.url.includes('conversations.history'))!.url).searchParams;
+    expect(hist.get('latest')).toBe('1700000001');
+  });
+
+  it('a whole-second until is passed as is', async () => {
+    const { calls } = serve(mockFetch, { ...BASE, 'conversations.history': { ok: true, messages: [] } });
+    await new SlackFetcher().fetchWithReport({ token: 't', since: SINCE, until: '2023-11-14T22:13:20.000Z', interChannelDelayMs: 0 });
+    expect(new URL(calls.find((c) => c.url.includes('conversations.history'))!.url).searchParams.get('latest')).toBe('1700000000');
+  });
+
+  it('drops replies at or after until, and a root inside the (rounded-up) second but after until', async () => {
+    const until = '2023-11-14T22:13:20.900Z'; // 1700000000.9
+    const { calls } = serve(mockFetch, {
+      ...BASE,
+      'conversations.history': {
+        ok: true,
+        messages: [
+          { ts: '1699990000.000000', reply_count: 2, latest_reply: '1700100000.000000', user: 'U1', text: 'root' },
+          { ts: '1700000000.950000', reply_count: 2, user: 'U1', text: 'root after until' },
+        ],
+      },
+      'conversations.replies & ts=1699990000.000000': {
+        ok: true,
+        messages: [
+          { ts: '1699990000.000000', user: 'U1', text: 'root' },
+          { ts: '1699990001.000000', user: 'U1', text: 'inside' },
+          { ts: '1700100000.000000', user: 'U1', text: 'after until' },
+        ],
+      },
+      'conversations.replies & ts=1700000000.950000': { ok: true, messages: [{ ts: '1700000000.950000', user: 'U1', text: 'root after until' }, { ts: '1700000000.960000', user: 'U1', text: 'x' }] },
+    });
+    const { items, report } = await new SlackFetcher().fetchWithReport({ token: 't', since: SINCE, until, interChannelDelayMs: 0 });
+    expect(items.map((i) => i.title)).toEqual(['root']);
+    expect(items[0]!.raw_text).toContain('inside');
+    expect(items[0]!.raw_text).not.toContain('after until');
+    expect(Date.parse(report.highWater!)).toBeLessThan(Date.parse(until));
+    // The root after until is not read at all (its own ts is outside the window).
+    expect(calls.filter((c) => c.url.includes('ts=1700000000.950000'))).toEqual([]);
+  });
+
+  it('a hot thread drops replies at or after until, and yields nothing when only those were new', async () => {
+    serve(mockFetch, {
+      ...BASE,
+      'conversations.list': { ok: true, channels: [] },
+      'conversations.replies': { ok: true, messages: [{ ts: '1600000000.000000', user: 'U1', text: 'root' }, { ts: '1800000000.000000', user: 'U1', text: 'far after until' }] },
+    });
+    const { items, report } = await new SlackFetcher().fetchWithReport({
+      token: 't',
+      since: SINCE,
+      until: '2023-11-15T00:00:00Z',
+      hotThreads: [{ channel: 'C1', ts: '1600000000.000000' }],
+      interChannelDelayMs: 0,
+    });
+    expect(items).toEqual([]);
+    expect(report.highWater).toBeUndefined();
+  });
+
+  it('buildFetchReport clamps highWater to until for every connector', () => {
+    const until = Date.parse('2026-05-10T00:00:00Z');
+    const items = [{ source_url: 'u', platform: 'p', raw_text: 'x', updated_at: '2026-06-01T00:00:00Z' }];
+    const r = buildFetchReport(items, { platform: 'p', scanned: 1, skips: [], scope: 'team', exhausted: true, untilMs: until });
+    expect(r.highWater).toBe('2026-05-10T00:00:00.000Z');
+    const r2 = buildFetchReport(items, { platform: 'p', scanned: 1, skips: [], scope: 'team', exhausted: true });
+    expect(r2.highWater).toBe('2026-06-01T00:00:00.000Z');
+  });
+});
+
+describe('3. Notion: an unreadable or cut body is reported, and blocks are paged', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const ID = '0123456789abcdef0123456789abcdef';
+  const URL_ = `https://www.notion.so/${ID}`;
+  const page = { id: ID, url: URL_, last_edited_time: '2026-05-05T00:00:00Z', properties: { title: { title: [{ plain_text: 'T' }] } } };
+  const block = (text: string) => ({ type: 'paragraph', paragraph: { rich_text: [{ plain_text: text }] } });
+
+  it.each([
+    ['a 500', { __status: 500, body: {} }],
+    ['a 403', { __status: 403, body: {} }],
+    ['an oversized body', 'x'.repeat(FETCH_ONE_MAX_BODY_BYTES + 1)],
+  ])('fetchOne with %s on blocks: the item comes back partial WITH an error skip', async (_n, blocks) => {
+    serve(mockFetch, { [`/v1/pages/${ID}`]: page, '/v1/blocks/': blocks });
+    const out = await new NotionFetcher().fetchOne(URL_, { token: 't' });
+    expect(out.item?.partial).toBe(true);
+    expect(out.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/body could not be read/) }]);
+  });
+
+  it('fetchOne pages blocks with a cursor (page_size 100) and reads every page inside the cap', async () => {
+    const { calls } = serve(mockFetch, {
+      [`/v1/pages/${ID}`]: page,
+      '/v1/blocks/': { results: [block('one')], has_more: true, next_cursor: 'B2' },
+      '/v1/blocks/ & start_cursor=B2': { results: [block('two')], has_more: false },
+    });
+    const out = await new NotionFetcher().fetchOne(URL_, { token: 't', maxBlockPages: 2 });
+    expect(out.item?.raw_text).toContain('two');
+    expect(out.item).not.toHaveProperty('partial');
+    expect(out.skips).toBeUndefined();
+    expect(calls.filter((c) => c.url.includes('/v1/blocks/')).every((c) => c.url.includes('page_size=100'))).toBe(true);
+  });
+
+  it('fetchOne past maxBlockPages: partial with a page_cap skip', async () => {
+    serve(mockFetch, {
+      [`/v1/pages/${ID}`]: page,
+      '/v1/blocks/': { results: [block('one')], has_more: true, next_cursor: 'B2' },
+      '/v1/blocks/ & start_cursor=B2': { results: [block('two')], has_more: false },
+    });
+    const out = await new NotionFetcher().fetchOne(URL_, { token: 't', maxBlockPages: 1 });
+    expect(out.item?.partial).toBe(true);
+    expect(out.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/blocks/) }]);
+  });
+
+  it('the list read marks cut and unreadable bodies partial and counts the cut ones as page_cap', async () => {
+    const p2 = { ...page, id: 'f'.repeat(32), url: `https://www.notion.so/${'f'.repeat(32)}` };
+    serve(mockFetch, {
+      '/v1/search': { results: [page, p2], has_more: false },
+      [`/v1/blocks/${ID}/children`]: { results: [block('one')], has_more: true, next_cursor: 'B2' },
+      [`/v1/blocks/${'f'.repeat(32)}/children`]: { __status: 500, body: {} },
+    });
+    const { items, report } = await new NotionFetcher().fetchWithReport({ token: 't', maxBlockPages: 1 });
+    expect(items.map((i) => i.partial)).toEqual([true, true]);
+    expect(report.skips).toContainEqual({ kind: 'page_cap', count: 1, detail: expect.stringMatching(/blocks/) });
+    expect(report.skips).toContainEqual(expect.objectContaining({ kind: 'error', count: 1 }));
+  });
+});
+
+describe('4. Zoom fetchOne never echoes the share or recording token', () => {
+  it.each(['https://zoom.us/rec/share/SECRETSHARETOKENabc123', 'https://acme.zoom.us/rec/play/SECRETSHARETOKENabc123?pwd=x', 'https://zoom.us/j/123?pwd=SECRETSHARETOKENabc123'])(
+    '%s',
+    async (url) => {
+      const out = await new ZoomFetcher().fetchOne(url);
+      expect(out.skip?.kind).toBe('shape');
+      expect(JSON.stringify(out)).not.toContain('SECRETSHARETOKENabc123');
+      expect(out.skip?.detail).toContain(new URL(url).origin); // it still says which site
+    },
+  );
+});
+
+describe('5. Zoom transcript download: zoom.us hosts only, token in a header, no redirects', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const meeting = (download_url: string) => ({
+    meetings: [{ id: 1, uuid: 'u1', topic: 't', start_time: new Date(Date.now() - 3_600_000).toISOString(), recording_files: [{ file_type: 'TRANSCRIPT', status: 'completed', download_url }] }],
+  });
+  const VTT = 'WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nhello\n';
+
+  it.each(['https://evil.com/vtt', 'https://zoom.us.evil.com/vtt', 'http://zoom.us/vtt', 'https://u:p@zoom.us/vtt', 'https://zoom.us:8443/vtt'])(
+    'a download_url of %s is never requested, and is a counted error skip',
+    async (dl) => {
+      const { calls } = serve(mockFetch, { '/users/me/recordings': meeting(dl), [dl]: VTT });
+      const { items, report } = await new ZoomFetcher().fetchWithReport({ token: 'SECRET', daysBack: 1 });
+      expect(calls.filter((c) => c.url.startsWith(dl))).toEqual([]);
+      expect(items).toEqual([]);
+      expect(report.skips).toContainEqual({ kind: 'error', count: 1, detail: expect.stringMatching(/not on zoom\.us/) });
+    },
+  );
+
+  it.each(['https://zoom.us/rec/download/x', 'https://acme.zoom.us/rec/download/x'])('%s is read with the token in an Authorization header, never the query', async (dl) => {
+    serve(mockFetch, { '/users/me/recordings': meeting(dl), [dl]: VTT });
+    const { items } = await new ZoomFetcher().fetchWithReport({ token: 'SECRET', daysBack: 1 });
+    expect(items).toHaveLength(1);
+    const call = mockFetch.mock.calls.find(([u]) => String(u).startsWith(dl))!;
+    expect(String(call[0])).not.toContain('SECRET');
+    const init = call[1] as { headers: Record<string, string>; redirect?: string };
+    expect(init.headers.Authorization).toBe('Bearer SECRET');
+    expect(init.redirect).toBe('manual');
+  });
+});
+
+describe('6. Slack hotThreads needs since', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockFetch.mockRejectedValue(new Error('no request may be made'));
+  });
+
+  it('hotThreads without since is refused before any request: a shape skip, not complete', async () => {
+    const { items, report } = await new SlackFetcher().fetchWithReport({ token: 't', hotThreads: [{ channel: 'C1', ts: '1600000000.000000' }] });
+    expect(mockFetch).toHaveBeenCalledTimes(0);
+    expect(items).toEqual([]);
+    expect(report.complete).toBe(false);
+    expect(report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/hotThreads needs since/) }]);
+  });
+
+  it('an empty hotThreads without since is not refused (positive control)', async () => {
+    mockFetch.mockReset();
+    serve(mockFetch, { 'auth.test': { ok: true }, 'conversations.list': { ok: true, channels: [] } });
+    const { report } = await new SlackFetcher().fetchWithReport({ token: 't', hotThreads: [], interChannelDelayMs: 0 });
+    expect(report.skips).toEqual([]);
+    expect(report.complete).toBe(true);
+  });
+});
+
+/** A finite chain of `n` Graph pages at /v1.0/p<i> (route keys), the last with no next link. */
+function graphChain(n: number, firstKey: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (let i = 0; i < n; i++) {
+    const key = i === 0 ? firstKey : `/v1.0/p${i}?`;
+    out[key] = { value: [{ body: { content: `r${i}` } }], ...(i + 1 < n ? { '@odata.nextLink': `https://graph.microsoft.com/v1.0/p${i + 1}?x=1` } : {}) };
+  }
+  return out;
+}
+
+describe('7. page caps refuse nonsense values; Confluence space keys are deduped', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const slackThread = () =>
+    serve(mockFetch, {
+      'conversations.info': { ok: true, channel: { name: 'eng' } },
+      'conversations.replies': { ok: true, messages: [{ ts: '1700000000.123456', text: 'root', user: 'U1' }], response_metadata: { next_cursor: 'P1' } },
+      'conversations.replies & cursor=P1': { ok: true, messages: [{ ts: '1700000001.000000', text: 'r1', user: 'U1' }], response_metadata: { next_cursor: 'P2' } },
+      'conversations.replies & cursor=P2': { ok: true, messages: [{ ts: '1700000002.000000', text: 'r2', user: 'U1' }], response_metadata: { next_cursor: 'P3' } },
+      'conversations.replies & cursor=P3': { ok: true, messages: [{ ts: '1700000003.000000', text: 'r3', user: 'U1' }] },
+      'users.info': { ok: true, user: { name: 'ada' } },
+    });
+
+  it.each([Number.NaN, 0, -1, Number.POSITIVE_INFINITY, 'lots'])('Slack fetchOne maxReplyPages %s falls back to the default cap of 3', async (cap) => {
+    slackThread();
+    const out = await new SlackFetcher().fetchOne('https://acme.slack.com/archives/C1/p1700000000123456', { token: 't', maxReplyPages: cap });
+    // The fallback is said (N3), beside the cap that fired.
+    expect(out.skips).toEqual([
+      { kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 3 page/) },
+      { kind: 'shape', count: 1, detail: expect.stringMatching(/maxReplyPages/) },
+    ]);
+  });
+
+  it.each([Number.NaN, 0, Number.POSITIVE_INFINITY])('Teams fetchOne maxReplyPages %s falls back to the default cap', async (cap) => {
+    const G = '11111111-2222-3333-4444-555555555555';
+    let n = 0;
+    // 25 reply pages: more than the default cap of 20, and finite, so a broken cap ends.
+    serve(mockFetch, { ...graphChain(25, '/messages/1/replies'), '/messages/1': { id: '1', body: { content: 'x' } } });
+    const out = await new TeamsFetcher().fetchOne(
+      `https://teams.microsoft.com/l/message/${encodeURIComponent('19:a@thread.tacv2')}/1?groupId=${G}&teamName=a&channelName=b`,
+      { token: 't', maxReplyPages: cap },
+    );
+    n = mockFetch.mock.calls.length;
+    expect(out.skips).toEqual([
+      { kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) },
+      { kind: 'shape', count: 1, detail: expect.stringMatching(/maxReplyPages/) },
+    ]);
+    expect(n).toBe(21); // the message, then exactly 20 reply pages
+  });
+
+  it('Teams list maxMessagePages NaN falls back to the default cap', async () => {
+    serve(mockFetch, {
+      '/me/joinedTeams': { value: [{ id: 'T1', displayName: 'P' }] },
+      '/teams/T1/channels': { value: [{ id: 'C', displayName: 'G' }] },
+      ...graphChain(25, '/teams/T1/channels/C/messages'),
+    });
+    const { report } = await new TeamsFetcher().fetchWithReport({ token: 't', maxMessagePages: Number.NaN });
+    expect(report.skips).toEqual([
+      { kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) },
+      { kind: 'shape', count: 1, detail: expect.stringMatching(/maxMessagePages/) },
+    ]);
+  });
+
+  it('a space key given twice is looked up and read once', async () => {
+    const { calls } = serve(mockFetch, {
+      '/api/v2/spaces?keys=': { results: [{ id: '100', key: 'ENG' }] },
+      '/api/v2/spaces/100/pages': { results: [{ id: '1', title: 'A', version: { createdAt: '2026-05-05T00:00:00Z' }, _links: { webui: '/pages/1' } }], _links: {} },
+    });
+    const { items, report } = await new ConfluenceFetcher().fetchWithReport({ token: 't', cloudId: 'cid', siteBase: 'https://acme.atlassian.net', spaces: ['ENG', 'ENG'] });
+    expect(items).toHaveLength(1);
+    expect(report.perScope).toEqual({ ENG: 1 });
+    expect(calls.filter((c) => c.url.includes('/spaces/100/pages'))).toHaveLength(1);
+    expect(calls.find((c) => c.url.includes('spaces?keys='))!.url).toContain('keys=ENG&');
+  });
+});

@@ -42,7 +42,8 @@ export interface FetcherItem {
    * The source's own last-updated time for this item, ISO-8601 Z. It feeds
    * {@link FetchReport.highWater}, the watermark an incremental sync resumes from,
    * so the same rule as `created_at` holds: absent when the source did not say,
-   * never the fetch time. Set by the github, gitlab, jira and linear fetchers (S2).
+   * never the fetch time. Set by every built-in token fetcher (github, gitlab, jira,
+   * linear in S2; confluence, notion, slack, teams, zoom in S3).
    */
   updated_at?: string;
   /**
@@ -52,8 +53,9 @@ export interface FetcherItem {
    * instead of adding a second. Absent where several items can share a URL, and
    * wherever normaliseSourceKey returns undefined (a synthetic or fallback URL).
    *
-   * Set by the github, gitlab, jira and linear fetchers (S2). For any other fetcher a
-   * consumer that wants a key calls normaliseSourceKey on `source_url` itself.
+   * Set by every built-in token fetcher where the key exists (S2, S3); absent on the Teams
+   * fallback URL. For any other fetcher a consumer that wants a key calls
+   * normaliseSourceKey on `source_url` itself.
    */
   source_key?: string;
   /**
@@ -63,6 +65,15 @@ export interface FetcherItem {
    * finishes it later (GitHub: `fetchGitHubDiscussion`). Absent or false: nothing pending.
    */
   detail_pending?: boolean;
+  /**
+   * True when this item holds only PART of what its `source_url` names: a Slack hot-thread
+   * re-read (only the messages since `since`), or a thread cut at a reply cap (Slack
+   * maxReplyPages, Teams more replies than one expanded page or than fetchOne's reply cap),
+   * or a Notion page whose body could not be read or was cut at maxBlockPages.
+   * It shares `source_url` and `source_key` with the whole item, so a consumer must MERGE
+   * it into a stored row, never replace the stored text with it. Absent when whole.
+   */
+  partial?: boolean;
 }
 
 /**
@@ -88,6 +99,14 @@ export interface ConnectorFetcherOptions {
    * otherwise returns a mixed, undifferentiated result with no way to ask for less.
    */
   repo?: string;
+  /**
+   * Slack only: threads the caller already holds whose roots may be older than `since`;
+   * their replies since `since` are re-read. Requires `since`: without it the read is
+   * refused (a `shape` skip, nothing read). Each resulting item is `partial: true` and
+   * shares its key with the stored thread, so a consumer must MERGE it into the stored
+   * row (append the new messages), never replace the stored text with it.
+   */
+  hotThreads?: Array<{ channel: string; ts: string }>;
   /**
    * Wall-clock budget for the whole read, in milliseconds. A fetcher that stops
    * because it ran out reports a `time_budget` skip, so the report says the read
@@ -152,11 +171,15 @@ export interface FetchReport {
    * A consumer MUST NOT advance a watermark when this is absent, even on
    * `complete: true`, and MUST NOT substitute `now()`, `created_at` or the newest
    * item's position for it. `created_at` is not an updated time: an old item edited
-   * today would sit below a watermark built from it and never be re-read. Only the
-   * fetchers that set `updated_at` (github, gitlab, jira, linear as of S2) can produce one.
+   * today would sit below a watermark built from it and never be re-read. Only items
+   * that carry `updated_at` can produce one.
+   *
+   * When the read had an `until`, this is clamped to it (as is {@link oldestReached}): an
+   * item that slipped past the bound cannot move the watermark beyond the window asked for.
    */
   highWater?: string;
-  /** The earliest `updated_at` among the returned items. Absent like `highWater`. */
+  /** The earliest `updated_at` among the returned items. Absent like `highWater`, and
+   *  clamped to `until` the same way, so it never sits above `highWater`. */
   oldestReached?: string;
   /**
    * True only when the read reached the end of what it was asked for: no cap, time
@@ -170,6 +193,12 @@ export interface FetchReport {
   /** 'yours': only the caller's own items (authored, assigned, involved). 'team':
    *  everything the token can read, other people's items included. */
   scope: 'yours' | 'team';
+  /**
+   * Items returned per named sub-scope the caller asked for (Confluence: per space key),
+   * so a multi-space read can say which space gave what. Absent where the fetcher reads
+   * one undivided scope.
+   */
+  perScope?: Record<string, number>;
 }
 
 export interface FetchResult {
@@ -199,6 +228,11 @@ export interface FetchOneOptions {
 export interface FetchOneResult {
   item?: FetcherItem;
   skip?: FetchSkip;
+  /** Only beside an `item`: what the read left out (a cap that fired, or a body it could
+   *  not read: the item is then `partial: true`) or set aside (a `shape` skip naming an
+   *  option that fell back to its default; the item can still be whole). Absent when the
+   *  item is whole and every option was used as given. */
+  skips?: FetchSkip[];
 }
 
 /**

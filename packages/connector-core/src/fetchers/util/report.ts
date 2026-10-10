@@ -21,6 +21,13 @@ export interface FetchReportParts {
   requested?: number;
   skips: FetchSkip[];
   scope: FetchReport['scope'];
+  perScope?: FetchReport['perScope'];
+  /**
+   * The read's exclusive upper bound (`until`), ms. `highWater` and `oldestReached` are
+   * both clamped to it, so an item that slipped past the bound can never move a watermark
+   * beyond the window asked for. Not copied into the report.
+   */
+  untilMs?: number;
   /**
    * The fetcher's own evidence that the source had nothing more: the last page was
    * short, no cursor came back, the item limit did not cut the read. False whenever
@@ -38,7 +45,7 @@ export interface FetchReportParts {
  * consumer must then not advance a watermark (see {@link FetchReport.highWater}).
  */
 export function buildFetchReport(items: FetcherItem[], parts: FetchReportParts): FetchReport {
-  const { exhausted, ...rest } = parts;
+  const { exhausted, untilMs, ...rest } = parts;
   let high: number | undefined;
   let low: number | undefined;
   for (const item of items) {
@@ -49,6 +56,10 @@ export function buildFetchReport(items: FetcherItem[], parts: FetchReportParts):
     if (high === undefined || ms > high) high = ms;
     if (low === undefined || ms < low) low = ms;
   }
+  // Both bounds are clamped to `until` the same way, so oldestReached can never sit above
+  // highWater and no bound reaches past the window asked for.
+  if (high !== undefined && untilMs !== undefined && high > untilMs) high = untilMs;
+  if (low !== undefined && untilMs !== undefined && low > untilMs) low = untilMs;
   const complete = exhausted && !parts.skips.some((s) => INCOMPLETE_SKIP_KINDS.has(s.kind));
   return {
     ...rest,

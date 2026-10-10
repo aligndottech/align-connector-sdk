@@ -114,7 +114,7 @@ const ATLASSIAN = { token: 'tok', cloudId: 'cid', siteBase: 'https://acme.atlass
  * (author, assignee, involves, host); 'team' = everything the token can see, other people's included.
  */
 /** Fetchers that return the vendor's updated time (S2: github, gitlab, jira, linear). */
-const SETS_UPDATED_AT = new Set(['github', 'gitlab', 'jira', 'linear']);
+const SETS_UPDATED_AT = new Set(['github', 'gitlab', 'jira', 'linear', 'confluence', 'notion', 'slack', 'teams', 'zoom']);
 
 const EXPECTED_SCOPE: Record<string, 'yours' | 'team'> = {
   github: 'yours', // involves:/reviewed-by: the caller, with or without repo
