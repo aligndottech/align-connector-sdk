@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.10.0...connector-core-v0.10.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **connector-core:** key a zoom Discover recording by meeting_id, give zoom chat no key ([#48](https://github.com/aligndottech/align-connector-sdk/issues/48)) ([9f8cc9d](https://github.com/aligndottech/align-connector-sdk/commit/9f8cc9daa7d3b1152d51a652dd895d92ba45e72b))
+
 ## [0.10.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.9.1...connector-core-v0.10.0) (2026-10-10)
 
 
