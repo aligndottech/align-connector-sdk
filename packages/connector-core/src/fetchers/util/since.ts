@@ -68,3 +68,11 @@ export class DescendingWindow {
 export function budgetSpent(startedAt: number, budgetMs: number | undefined): boolean {
   return budgetMs !== undefined && Date.now() - startedAt > budgetMs;
 }
+
+/**
+ * A page cap from options: a finite whole number of at least 1, else the default. NaN,
+ * Infinity, 0 and negatives would otherwise read nothing or read forever, silently.
+ */
+export function capOption(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
+}

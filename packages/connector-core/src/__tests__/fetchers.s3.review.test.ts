@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetch } from 'undici';
 import { TeamsFetcher } from '../fetchers/teams.js';
 import { SlackFetcher } from '../fetchers/slack.js';
+import { NotionFetcher } from '../fetchers/notion.js';
+import { FETCH_ONE_MAX_BODY_BYTES } from '../fetchers/util/single.js';
 import { buildFetchReport } from '../fetchers/util/report.js';
 import { serve } from './helpers/statusFetch.js';
 
@@ -145,5 +147,64 @@ describe('2. Slack until bounds replies and hot threads; highWater never passes 
     expect(r.highWater).toBe('2026-05-10T00:00:00.000Z');
     const r2 = buildFetchReport(items, { platform: 'p', scanned: 1, skips: [], scope: 'team', exhausted: true });
     expect(r2.highWater).toBe('2026-06-01T00:00:00.000Z');
+  });
+});
+
+describe('3. Notion: an unreadable or cut body is reported, and blocks are paged', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const ID = '0123456789abcdef0123456789abcdef';
+  const URL_ = `https://www.notion.so/${ID}`;
+  const page = { id: ID, url: URL_, last_edited_time: '2026-05-05T00:00:00Z', properties: { title: { title: [{ plain_text: 'T' }] } } };
+  const block = (text: string) => ({ type: 'paragraph', paragraph: { rich_text: [{ plain_text: text }] } });
+
+  it.each([
+    ['a 500', { __status: 500, body: {} }],
+    ['a 403', { __status: 403, body: {} }],
+    ['an oversized body', 'x'.repeat(FETCH_ONE_MAX_BODY_BYTES + 1)],
+  ])('fetchOne with %s on blocks: the item comes back partial WITH an error skip', async (_n, blocks) => {
+    serve(mockFetch, { [`/v1/pages/${ID}`]: page, '/v1/blocks/': blocks });
+    const out = await new NotionFetcher().fetchOne(URL_, { token: 't' });
+    expect(out.item?.partial).toBe(true);
+    expect(out.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/body could not be read/) }]);
+  });
+
+  it('fetchOne pages blocks with a cursor (page_size 100) and reads every page inside the cap', async () => {
+    const { calls } = serve(mockFetch, {
+      [`/v1/pages/${ID}`]: page,
+      '/v1/blocks/': { results: [block('one')], has_more: true, next_cursor: 'B2' },
+      '/v1/blocks/ & start_cursor=B2': { results: [block('two')], has_more: false },
+    });
+    const out = await new NotionFetcher().fetchOne(URL_, { token: 't', maxBlockPages: 2 });
+    expect(out.item?.raw_text).toContain('two');
+    expect(out.item).not.toHaveProperty('partial');
+    expect(out.skips).toBeUndefined();
+    expect(calls.filter((c) => c.url.includes('/v1/blocks/')).every((c) => c.url.includes('page_size=100'))).toBe(true);
+  });
+
+  it('fetchOne past maxBlockPages: partial with a page_cap skip', async () => {
+    serve(mockFetch, {
+      [`/v1/pages/${ID}`]: page,
+      '/v1/blocks/': { results: [block('one')], has_more: true, next_cursor: 'B2' },
+      '/v1/blocks/ & start_cursor=B2': { results: [block('two')], has_more: false },
+    });
+    const out = await new NotionFetcher().fetchOne(URL_, { token: 't', maxBlockPages: 1 });
+    expect(out.item?.partial).toBe(true);
+    expect(out.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/blocks/) }]);
+  });
+
+  it('the list read marks cut and unreadable bodies partial and counts the cut ones as page_cap', async () => {
+    const p2 = { ...page, id: 'f'.repeat(32), url: `https://www.notion.so/${'f'.repeat(32)}` };
+    serve(mockFetch, {
+      '/v1/search': { results: [page, p2], has_more: false },
+      [`/v1/blocks/${ID}/children`]: { results: [block('one')], has_more: true, next_cursor: 'B2' },
+      [`/v1/blocks/${'f'.repeat(32)}/children`]: { __status: 500, body: {} },
+    });
+    const { items, report } = await new NotionFetcher().fetchWithReport({ token: 't', maxBlockPages: 1 });
+    expect(items.map((i) => i.partial)).toEqual([true, true]);
+    expect(report.skips).toContainEqual({ kind: 'page_cap', count: 1, detail: expect.stringMatching(/blocks/) });
+    expect(report.skips).toContainEqual(expect.objectContaining({ kind: 'error', count: 1 }));
   });
 });

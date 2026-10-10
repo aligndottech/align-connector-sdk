@@ -105,7 +105,7 @@ describe('NotionFetcher.fetchOne', () => {
   it('reads the page and its first 50 blocks from the id at the end of the URL', async () => {
     const { calls } = serve(mockFetch, {
       [`/v1/pages/${ID_A}`]: notionPage(ID_A, AFTER, 'Spec'),
-      [`/v1/blocks/${ID_A}/children?page_size=50`]: { results: [{ type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'We use Postgres.' }] } }] },
+      [`/v1/blocks/${ID_A}/children?page_size=100`]: { results: [{ type: 'paragraph', paragraph: { rich_text: [{ plain_text: 'We use Postgres.' }] } }] },
     });
     const { item, skip } = await new NotionFetcher().fetchOne(`https://www.notion.so/acme/Spec-${ID_A}`, { token: 't' });
     expect(skip).toBeUndefined();

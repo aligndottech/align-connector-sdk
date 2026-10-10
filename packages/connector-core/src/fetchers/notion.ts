@@ -3,7 +3,7 @@ import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOp
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
 import { buildFetchReport, refusedRead } from './util/report.js';
-import { budgetSpent, DescendingWindow } from './util/since.js';
+import { budgetSpent, capOption, DescendingWindow } from './util/since.js';
 import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 
@@ -32,6 +32,9 @@ interface NotionBlock {
 // Notion's own per-page maximum for /v1/search. Before ALI-828 the read was one
 // page sized to the limit, with the cursor Notion returned never sent back.
 const NOTION_PAGE_MAX = 100;
+/** Notion's maximum page of block children, and how many such pages a page's body reads. */
+const NOTION_BLOCK_PAGE_MAX = 100;
+const NOTION_MAX_BLOCK_PAGES = 10;
 
 /** Resolve a Notion user id to a name (cached). Degrades to undefined on failure. With a
  *  `signal` (fetchOne) the lookup is bounded by it, and an abort is rethrown so the
@@ -89,8 +92,9 @@ async function notionItem(
   page: NotionPage,
   headers: Record<string, string>,
   resolveUser: (id?: string) => Promise<{ name: string; email?: string } | undefined>,
+  maxBlockPages: number,
   signal?: AbortSignal,
-): Promise<{ item: FetcherItem; bodyUnreadable: boolean }> {
+): Promise<{ item: FetcherItem; bodyUnreadable: boolean; blocksCut: boolean }> {
   const title = extractPageTitle(page);
   const pageUrl = page.url ?? `https://notion.so/${page.id.replace(/-/g, '')}`;
   const author = await resolveUser(page.created_by?.id);
@@ -98,22 +102,42 @@ async function notionItem(
   const updatedAt = toIsoOrUndefined(page.last_edited_time);
   const sourceKey = normaliseSourceKey('notion', pageUrl);
 
-  let bodyText = '';
+  // Blocks are paged (page_size 100, start_cursor) up to maxBlockPages. A body that could
+  // not be read, or that the cap cut, makes the item partial: the caller reports it.
+  const texts: string[] = [];
   let bodyUnreadable = false;
+  let blocksCut = false;
+  let cursor: string | undefined;
   try {
-    const blocksUrl = `https://api.notion.com/v1/blocks/${page.id}/children?page_size=50`;
-    const blocksRes = signal ? await fetch(blocksUrl, fetchOneInit(headers, signal)) : await fetch(blocksUrl, { headers });
-    if (blocksRes.ok) {
-      const blocks = (signal ? await jsonOrThrow(blocksRes) : await blocksRes.json()) as { results: NotionBlock[] };
-      bodyText = blocks.results.map(extractBlockText).filter(Boolean).join('\n');
-    } else {
-      bodyUnreadable = true;
+    for (let pageNo = 0; ; pageNo++) {
+      if (pageNo >= maxBlockPages) {
+        blocksCut = true;
+        break;
+      }
+      const blocksUrl =
+        `https://api.notion.com/v1/blocks/${page.id}/children?page_size=${NOTION_BLOCK_PAGE_MAX}` +
+        (cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : '');
+      const blocksRes = signal ? await fetch(blocksUrl, fetchOneInit(headers, signal)) : await fetch(blocksUrl, { headers });
+      if (!blocksRes.ok) {
+        bodyUnreadable = true;
+        break;
+      }
+      const blocks = (signal ? await jsonOrThrow(blocksRes) : await blocksRes.json()) as {
+        results: NotionBlock[];
+        has_more?: boolean;
+        next_cursor?: string | null;
+      };
+      texts.push(...blocks.results.map(extractBlockText).filter(Boolean));
+      cursor = blocks.has_more ? (blocks.next_cursor ?? undefined) : undefined;
+      if (!cursor) break;
     }
   } catch (e) {
     // A timeout belongs to the single-item read's budget, not to "body unreadable".
     if (signal?.aborted) throw e;
     bodyUnreadable = true;
   }
+  const bodyText = texts.join('\n');
+  const partial = bodyUnreadable || blocksCut;
 
   return {
     item: {
@@ -125,8 +149,10 @@ async function notionItem(
       ...(updatedAt ? { updated_at: updatedAt } : {}),
       ...(sourceKey ? { source_key: sourceKey } : {}),
       ...(author ? { author } : {}),
+      ...(partial ? { partial: true } : {}),
     },
     bodyUnreadable,
+    blocksCut,
   };
 }
 
@@ -157,8 +183,12 @@ export class NotionFetcher implements ConnectorFetcher {
     return guardFetchOne('Notion', opts.timeoutMs, async (signal) => {
       const headers = notionHeaders(opts.token);
       const page = await jsonOrThrow<NotionPage>(await fetch(`https://api.notion.com/v1/pages/${id}`, fetchOneInit(headers, signal)));
-      const { item } = await notionItem(page, headers, makeNotionUserResolver(headers, signal), signal);
-      return { item };
+      const maxBlockPages = capOption(opts.maxBlockPages, NOTION_MAX_BLOCK_PAGES);
+      const { item, bodyUnreadable, blocksCut } = await notionItem(page, headers, makeNotionUserResolver(headers, signal), maxBlockPages, signal);
+      const skips: FetchSkip[] = [];
+      if (bodyUnreadable) skips.push({ kind: 'error', count: 1, detail: 'page body could not be read (title only)' });
+      if (blocksCut) skips.push({ kind: 'page_cap', count: 1, detail: `page blocks cut at ${maxBlockPages} page(s) of ${NOTION_BLOCK_PAGE_MAX} (raise maxBlockPages)` });
+      return skips.length ? { item, skips } : { item };
     });
   }
 
@@ -177,6 +207,8 @@ export class NotionFetcher implements ConnectorFetcher {
     const items: FetcherItem[] = [];
     let scanned = 0;
     let bodiesUnreadable = 0;
+    let bodiesCut = 0;
+    const maxBlockPages = capOption(opts.maxBlockPages, NOTION_MAX_BLOCK_PAGES);
     let cursor: string | undefined;
     let cutByLimit = false;
     let reachedSince = false;
@@ -218,8 +250,9 @@ export class NotionFetcher implements ConnectorFetcher {
           break;
         }
         if (place === 'drop') continue;
-        const { item, bodyUnreadable } = await notionItem(page, headers, resolveUser);
+        const { item, bodyUnreadable, blocksCut } = await notionItem(page, headers, resolveUser, maxBlockPages);
         if (bodyUnreadable) bodiesUnreadable += 1;
+        if (blocksCut) bodiesCut += 1;
         items.push(item);
       }
       cursor = data.has_more ? (data.next_cursor ?? undefined) : undefined;
@@ -228,6 +261,9 @@ export class NotionFetcher implements ConnectorFetcher {
     const skips: FetchSkip[] = [...window.skips('pages')];
     if (bodiesUnreadable > 0) {
       skips.push({ kind: 'error', count: bodiesUnreadable, detail: 'pages whose body could not be read (kept, title only)' });
+    }
+    if (bodiesCut > 0) {
+      skips.push({ kind: 'page_cap', count: bodiesCut, detail: `pages whose blocks were cut at ${maxBlockPages} page(s) (kept, partial; raise maxBlockPages)` });
     }
     if (outOfTime) {
       skips.push({ kind: 'time_budget', count: 1, detail: `page search stopped before its end (the ${opts.timeBudgetMs} ms time budget ran out)` });
