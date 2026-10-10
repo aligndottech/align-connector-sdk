@@ -3,6 +3,9 @@ import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResul
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
+import { budgetSpent, sinceMs } from './util/since.js';
+import type { FetchOneResult } from './util/single.js';
+import { normaliseSourceKey } from '../sourceKey.js';
 
 interface ZoomRecordingFile {
   file_type: string;
@@ -35,17 +38,21 @@ function isoDay(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-/** Day windows covering the last `daysBack` days, newest first. */
-function recordingWindows(now: number, daysBack: number): Array<{ from: string; to: string }> {
+/** Day windows from the day `oldestDay` (inclusive, a UTC day start) to today, newest first. */
+function windowsFrom(now: number, oldestDay: number): Array<{ from: string; to: string }> {
   const windows: Array<{ from: string; to: string }> = [];
   let to = Math.floor(now / DAY_MS) * DAY_MS;
-  const oldest = to - daysBack * DAY_MS;
-  while (to > oldest) {
-    const from = Math.max(to - (ZOOM_WINDOW_DAYS - 1) * DAY_MS, oldest);
+  while (to >= oldestDay) {
+    const from = Math.max(to - (ZOOM_WINDOW_DAYS - 1) * DAY_MS, oldestDay);
     windows.push({ from: isoDay(from), to: isoDay(to) });
     to = from - DAY_MS;
   }
   return windows;
+}
+
+/** Day windows covering the last `daysBack` days, newest first. */
+function recordingWindows(now: number, daysBack: number): Array<{ from: string; to: string }> {
+  return windowsFrom(now, Math.floor(now / DAY_MS) * DAY_MS - (daysBack - 1) * DAY_MS);
 }
 
 function parseWebVtt(vtt: string): string {
@@ -85,6 +92,14 @@ async function zoomGet<T>(path: string, token: string): Promise<T> {
  * counted into the report rather than dropped in silence.
  */
 export class ZoomFetcher implements ConnectorFetcher {
+  /**
+   * Not supported: a recording or share link does not name a transcript the user's own
+   * token can fetch on its own, so every URL is a `shape` skip and no request is made.
+   */
+  async fetchOne(url: string): Promise<FetchOneResult> {
+    return { skip: { kind: 'shape', count: 1, detail: `Zoom links are not supported for single capture: ${url}` } };
+  }
+
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
     return (await this.fetchWithReport(opts)).items;
   }
@@ -93,6 +108,11 @@ export class ZoomFetcher implements ConnectorFetcher {
     const limit = opts.limit ?? 30;
     const daysBack = (opts.daysBack as number | undefined) ?? 90;
     const uuid = opts.uuid as string | undefined;
+    // `since` maps to 30-day from/to windows reaching back to the since DAY (Zoom's
+    // from/to are dates); a meeting earlier that day is then dropped by its start time.
+    const since = sinceMs(opts.since);
+    const startedAt = Date.now();
+    let windowsOutOfTime = 0;
     const pageSize = Math.min(limit, ZOOM_PAGE_MAX);
     const items: FetcherItem[] = [];
     const seen = new Set<string>();
@@ -104,10 +124,19 @@ export class ZoomFetcher implements ConnectorFetcher {
     let cutByLimit = false;
 
     // The single-meeting path has no window and is one request by construction.
-    const windows: Array<{ from: string; to: string } | undefined> = uuid ? [undefined] : recordingWindows(Date.now(), daysBack);
-    for (const window of windows) {
+    const windows: Array<{ from: string; to: string } | undefined> = uuid
+      ? [undefined]
+      : since !== undefined
+        ? windowsFrom(startedAt, Math.floor(since / DAY_MS) * DAY_MS)
+        : recordingWindows(startedAt, daysBack);
+    for (let wi = 0; wi < windows.length; wi++) {
+      const window = windows[wi];
       if (items.length >= limit) {
         cutByLimit = true;
+        break;
+      }
+      if (wi > 0 && budgetSpent(startedAt, opts.timeBudgetMs)) {
+        windowsOutOfTime = windows.length - wi;
         break;
       }
       let pageToken: string | undefined;
@@ -128,6 +157,8 @@ export class ZoomFetcher implements ConnectorFetcher {
         }
         if (seen.has(meeting.uuid)) continue;
         seen.add(meeting.uuid);
+        const startMs = Date.parse(meeting.start_time);
+        if (since !== undefined && !Number.isNaN(startMs) && startMs < since) continue; // the since day, before since
         scanned += 1;
         const transcripts = (meeting.recording_files ?? []).filter((f) => f.file_type === 'TRANSCRIPT');
         const vttFile = transcripts.find((f) => f.status === 'completed');
@@ -157,12 +188,18 @@ export class ZoomFetcher implements ConnectorFetcher {
           const host = meeting.host_email
             ? { name: meeting.host_email.split('@')[0], email: meeting.host_email }
             : undefined;
+          const sourceUrl = `https://zoom.us/recording/${encodeMeetingUuid(meeting.uuid)}`;
+          const sourceKey = normaliseSourceKey('zoom', sourceUrl);
           items.push({
-            source_url: `https://zoom.us/recording/${encodeMeetingUuid(meeting.uuid)}`,
+            source_url: sourceUrl,
             platform: 'zoom',
             raw_text: `[${meeting.topic} - ${date}]\n${transcript}`.slice(0, 4000),
             title: `${meeting.topic} (${date})`.slice(0, 80),
             ...(createdAt ? { created_at: createdAt } : {}),
+            // A recorded meeting does not change after it ends, and the windows are cut by
+            // start date, so the start time is both its date and where a resume begins.
+            ...(createdAt ? { updated_at: createdAt } : {}),
+            ...(sourceKey ? { source_key: sourceKey } : {}),
             ...(host ? { author: host } : {}),
           });
         } catch {
@@ -180,9 +217,12 @@ export class ZoomFetcher implements ConnectorFetcher {
       skips.push({ kind: 'pending', count: transcriptPending, detail: 'meetings whose transcript is not ready yet (Zoom is still processing it)' });
     }
     if (unreadable > 0) skips.push({ kind: 'error', count: unreadable, detail: 'transcripts that could not be downloaded' });
+    if (windowsOutOfTime > 0) {
+      skips.push({ kind: 'time_budget', count: windowsOutOfTime, detail: `30-day windows not read (the ${opts.timeBudgetMs} ms time budget ran out)` });
+    }
     return {
       items,
-      report: buildFetchReport(items, { platform: 'zoom', scanned, requested: limit, skips, scope: 'yours', exhausted: !cutByLimit }),
+      report: buildFetchReport(items, { platform: 'zoom', scanned, requested: limit, skips, scope: 'yours', exhausted: !cutByLimit && windowsOutOfTime === 0 }),
     };
   }
 }

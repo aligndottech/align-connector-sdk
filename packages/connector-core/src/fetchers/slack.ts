@@ -1,27 +1,46 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
+import { budgetSpent, sinceMs } from './util/since.js';
+import { guardFetchOne, shapeSkip, type FetchOneResult } from './util/single.js';
+import { normaliseSourceKey } from '../sourceKey.js';
+
+/** A Slack `ok:false` answer, carrying its error code so a caller can classify it. */
+class SlackApiError extends Error {
+  constructor(
+    readonly endpoint: string,
+    readonly code: string,
+  ) {
+    super(`Slack API error on ${endpoint}: ${code}`);
+    this.name = 'SlackApiError';
+  }
+}
 
 async function slackGet(
   endpoint: string,
   token: string,
   params: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const qs = new URLSearchParams(params);
   const res = await fetch(`https://slack.com/api/${endpoint}?${qs}`, {
     headers: { Authorization: `Bearer ${token}` },
+    ...(signal ? { signal } : {}),
   });
   const data = (await res.json()) as Record<string, unknown>;
   if (!data.ok) {
     // Slack answers HTTP 200 with ok:false and an error code; these codes are its 401.
     const code = String(data.error);
     if (SLACK_AUTH_ERRORS.has(code)) throw new FetcherAuthError('Slack', code);
-    throw new Error(`Slack API error on ${endpoint}: ${code}`);
+    throw new SlackApiError(endpoint, code);
   }
   return data;
 }
+
+/** Codes meaning this token cannot see the channel: for a single capture, an `auth` skip. */
+const SLACK_NO_ACCESS = new Set(['channel_not_found', 'not_in_channel', 'missing_scope', 'access_denied']);
 
 /** Slack's error codes that mean the token itself was refused (its documented auth family). */
 const SLACK_AUTH_ERRORS = new Set(['invalid_auth', 'not_authed', 'token_revoked', 'token_expired', 'account_inactive']);
@@ -30,6 +49,8 @@ interface SlackMessage {
   ts: string;
   text?: string;
   reply_count?: number;
+  /** On a thread root: the ts of its newest reply. */
+  latest_reply?: string;
   user?: string;
   bot_id?: string;
   subtype?: string;
@@ -139,12 +160,13 @@ async function slackPaged<T>(
   rowsKey: 'channels' | 'messages',
   maxPages: number,
   enough: (rows: T[]) => boolean = () => false,
+  signal?: AbortSignal,
 ): Promise<{ rows: T[]; truncated: boolean }> {
   const rows: T[] = [];
   let cursor: string | undefined;
   let pages = 0;
   for (;;) {
-    const data = await slackGet(endpoint, token, { ...params, ...(cursor ? { cursor } : {}) });
+    const data = await slackGet(endpoint, token, { ...params, ...(cursor ? { cursor } : {}) }, signal);
     rows.push(...((data[rowsKey] as T[] | undefined) ?? []));
     pages += 1;
     cursor = (data.response_metadata as { next_cursor?: string } | undefined)?.next_cursor || undefined;
@@ -154,13 +176,13 @@ async function slackPaged<T>(
 }
 
 /** Resolve a Slack user id to a display name (cached - one users.info call per unique user). */
-function makeUserResolver(token: string) {
+function makeUserResolver(token: string, signal?: AbortSignal) {
   const cache = new Map<string, { name: string; handle?: string; email?: string } | null>();
   return async (userId: string | undefined): Promise<{ name: string; handle?: string; email?: string } | undefined> => {
     if (!userId) return undefined;
     if (cache.has(userId)) return cache.get(userId) ?? undefined;
     try {
-      const data = await slackGet('users.info', token, { user: userId });
+      const data = await slackGet('users.info', token, { user: userId }, signal);
       const u = (data.user ?? {}) as {
         name?: string;
         real_name?: string;
@@ -181,6 +203,74 @@ function makeUserResolver(token: string) {
   };
 }
 
+/** Dedupe by ts: Slack does not say whether a cursor page of replies carries the parent
+ *  again, and a repeated root would double its text. */
+function uniqueByTs(rows: SlackMessage[]): SlackMessage[] {
+  const seen = new Set<string>();
+  const out: SlackMessage[] = [];
+  for (const m of rows) {
+    if (seen.has(m.ts)) continue;
+    seen.add(m.ts);
+    out.push(m);
+  }
+  return out;
+}
+
+/**
+ * One thread as an item, or undefined when no person spoke in it. The ONE mapper for
+ * the list read, hot threads and fetchOne. `rootTs` names the thread (its URL and date);
+ * `updated_at` is the newest message read, so a new reply moves the watermark.
+ */
+async function slackThreadItem(
+  channel: SlackChannel,
+  rootTs: string,
+  messages: SlackMessage[],
+  resolveUser: (id: string | undefined) => Promise<{ name: string; handle?: string; email?: string } | undefined>,
+): Promise<FetcherItem | undefined> {
+  // The thread's identity comes from the first HUMAN message: a deleted or bot root has
+  // no title and nobody to attribute, but the conversation under it may be entirely real.
+  const firstHuman = messages.find(isHumanMessage);
+  if (!firstHuman) return undefined;
+  // Every fetched message, bot replies included: a bot reply inside a human thread is
+  // often the CI output being discussed.
+  const text = messages.map((m) => m.text ?? '').join('\n');
+  const author = await resolveUser(firstHuman.user);
+  // The root's ts: epoch seconds with microseconds, so the thread is dated by when it started.
+  const createdAt = toIsoOrUndefined(Number(rootTs) * 1000);
+  const newest = Math.max(...messages.map((m) => Number(m.ts)).filter((n) => Number.isFinite(n)));
+  const updatedAt = Number.isFinite(newest) ? toIsoOrUndefined(newest * 1000) : undefined;
+  const sourceUrl = `https://slack.com/archives/${channel.id}/p${rootTs.replace('.', '')}`;
+  const sourceKey = normaliseSourceKey('slack', sourceUrl);
+  return {
+    source_url: sourceUrl,
+    platform: 'slack',
+    raw_text: `[#${channel.name}] Thread:\n${text}`,
+    title: (firstHuman.text ?? `Thread in #${channel.name}`).slice(0, 80),
+    ...(createdAt ? { created_at: createdAt } : {}),
+    ...(updatedAt ? { updated_at: updatedAt } : {}),
+    ...(sourceKey ? { source_key: sourceKey } : {}),
+    ...(author ? { author } : {}),
+  };
+}
+
+/** Channel id and thread-root ts from a message permalink, else undefined. A reply's
+ *  permalink names its thread in `thread_ts`; the thread is the item. */
+function parsePermalink(url: string): { channel: string; ts: string } | undefined {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return undefined;
+  }
+  const host = u.hostname.toLowerCase();
+  if (host !== 'slack.com' && !host.endsWith('.slack.com')) return undefined;
+  const m = /^\/archives\/([A-Z0-9]+)\/p(\d{16})\/?$/.exec(u.pathname);
+  if (!m) return undefined;
+  const threadTs = u.searchParams.get('thread_ts');
+  const ts = threadTs && /^\d{10}\.\d{6}$/.test(threadTs) ? threadTs : `${m[2]!.slice(0, 10)}.${m[2]!.slice(10)}`;
+  return { channel: m[1]!, ts };
+}
+
 /**
  * Read-only personal Slack fetcher: threaded conversations (>=2 replies) the
  * token can see, within `daysBack`, that hold at least one HUMAN message. Title
@@ -195,6 +285,39 @@ function makeUserResolver(token: string) {
  * (override via `interChannelDelayMs`).
  */
 export class SlackFetcher implements ConnectorFetcher {
+  /**
+   * Capture one thread by permalink: `conversations.info` for the channel name, then one
+   * `conversations.replies` read of the thread (plus the author lookup). A channel the
+   * token cannot see is an `auth` skip. Never throws.
+   */
+  async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
+    const link = parsePermalink(url);
+    if (!link) return shapeSkip('Slack', url, 'not a message permalink');
+    return guardFetchOne('Slack', opts.timeoutMs, async (signal) => {
+      try {
+        const info = await slackGet('conversations.info', opts.token, { channel: link.channel }, signal);
+        const channel = { id: link.channel, name: (info.channel as { name?: string } | undefined)?.name ?? link.channel };
+        const replies = await slackPaged<SlackMessage>(
+          'conversations.replies',
+          opts.token,
+          { channel: link.channel, ts: link.ts, limit: String(SLACK_REPLIES_PAGE_SIZE) },
+          'messages',
+          SLACK_MAX_REPLY_PAGES,
+          () => false,
+          signal,
+        );
+        const item = await slackThreadItem(channel, link.ts, uniqueByTs(replies.rows), makeUserResolver(opts.token, signal));
+        if (!item) return { skip: { kind: 'shape', count: 1, detail: `Slack thread has no human message (bot or system output only): ${url}` } };
+        return { item };
+      } catch (e) {
+        if (e instanceof SlackApiError && SLACK_NO_ACCESS.has(e.code)) {
+          return { skip: { kind: 'auth', count: 1, detail: `Slack token cannot read this channel (${e.code})` } };
+        }
+        throw e;
+      }
+    });
+  }
+
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
     return (await this.fetchWithReport(opts)).items;
   }
@@ -208,12 +331,16 @@ export class SlackFetcher implements ConnectorFetcher {
     const maxReplyPages = (opts.maxReplyPages as number | undefined) ?? SLACK_MAX_REPLY_PAGES;
     const timeBudgetMs = (opts.timeBudgetMs as number | undefined) ?? SLACK_TIME_BUDGET_MS;
     const startedAt = Date.now();
-    // KNOWN GAP: `oldest` bounds conversations.history by the thread ROOT's ts, so a
-    // reply added today to a thread whose root is older than the window is never seen,
-    // and a thread already captured never picks up its later replies. A `complete: true`
-    // here means "every root in the window was read", not "every reply". The planned
-    // fix is a `hotThreads` option that re-reads named threads' replies (plan phase S3).
-    const oldest = String(Math.floor(startedAt / 1000) - daysBack * 86400);
+    // `oldest` bounds conversations.history by the thread ROOT's ts, so a reply added
+    // today to a thread whose root is older than the window is not seen by the channel
+    // walk. `complete: true` means "every root in the window was read", not "every
+    // reply". `hotThreads` is the remedy: the caller names threads it already holds and
+    // their replies since `since` are re-read below.
+    // `since` wins over daysBack, which stays as the fallback window.
+    const since = sinceMs(opts.since);
+    const sinceS = since === undefined ? undefined : Math.floor(since / 1000);
+    const oldest = String(sinceS ?? Math.floor(startedAt / 1000) - daysBack * 86400);
+    const hotThreads = (opts.hotThreads as Array<{ channel: string; ts: string }> | undefined) ?? [];
 
     await slackGet('auth.test', opts.token);
 
@@ -241,6 +368,9 @@ export class SlackFetcher implements ConnectorFetcher {
     let channelsUnreadable = 0;
     let threadsUnreadable = 0;
     let channelsOutOfTime = 0;
+    let channelsHistoryRead = 0;
+    let hotOutOfTime = 0;
+    const threadsRead = new Set<string>();
     // The item limit leaving a channel or thread unread. Not a skip line (the caller set
     // the limit), but the read is not complete.
     let cutByLimit = false;
@@ -267,6 +397,7 @@ export class SlackFetcher implements ConnectorFetcher {
           'messages',
           maxHistoryPages,
         );
+        channelsHistoryRead += 1;
         if (hist.truncated) historyCut += 1;
         const threads = hist.rows.filter((m) => (m.reply_count ?? 0) >= 2);
         shortMessages += hist.rows.length - threads.length;
@@ -276,7 +407,12 @@ export class SlackFetcher implements ConnectorFetcher {
             cutByLimit = true;
             break;
           }
+          // A root whose newest reply predates `since` has nothing new: skip its replies
+          // call (roots carry latest_reply). Unknown latest_reply is read, never guessed.
+          const latest = Number(thread.latest_reply);
+          if (sinceS !== undefined && thread.latest_reply !== undefined && Number.isFinite(latest) && latest < sinceS) continue;
           threadsScanned += 1;
+          threadsRead.add(`${channel.id}:${thread.ts}`);
           try {
             const replies = await slackPaged<SlackMessage>(
               'conversations.replies',
@@ -288,44 +424,59 @@ export class SlackFetcher implements ConnectorFetcher {
             // A truncated thread is still an item; dropping it would lose the
             // decision to protect a byte count. The truncation is reported instead.
             if (replies.truncated) repliesCut += 1;
-            // Dedupe by ts: Slack does not say whether a cursor page of replies carries
-            // the parent again, and a repeated root would double its text.
-            const seenTs = new Set<string>();
-            const allMsgs: SlackMessage[] = [];
-            for (const m of replies.rows) {
-              if (seenTs.has(m.ts)) continue;
-              seenTs.add(m.ts);
-              allMsgs.push(m);
-            }
-            // The thread's identity comes from the first HUMAN message: a deleted or
-            // bot root has no title and nobody to attribute, but the conversation
-            // under it may be entirely real.
-            const firstHuman = allMsgs.find(isHumanMessage);
-            if (!firstHuman) {
+            const item = await slackThreadItem(channel, thread.ts, uniqueByTs(replies.rows), resolveUser);
+            if (!item) {
               noHumanThreads += 1; // machinery, not a conversation
               continue;
             }
-
-            // Every fetched message, bot replies included: a bot reply inside a human
-            // thread is often the CI output being discussed.
-            const text = allMsgs.map((m) => m.text ?? '').join('\n');
-            const author = await resolveUser(firstHuman.user);
-            // The root's ts: epoch seconds with microseconds, so the thread is dated by when it started.
-            const createdAt = toIsoOrUndefined(Number(thread.ts) * 1000);
-            items.push({
-              source_url: `https://slack.com/archives/${channel.id}/p${thread.ts.replace('.', '')}`,
-              platform: 'slack',
-              raw_text: `[#${channel.name}] Thread:\n${text}`,
-              title: (firstHuman.text ?? `Thread in #${channel.name}`).slice(0, 80),
-              ...(createdAt ? { created_at: createdAt } : {}),
-              ...(author ? { author } : {}),
-            });
+            items.push(item);
           } catch {
             threadsUnreadable += 1;
           }
         }
       } catch {
         channelsUnreadable += 1;
+      }
+    }
+
+    // Hot threads: threads the caller already holds whose roots may be older than the
+    // window. Re-read with `oldest = since`, so only replies since then come back; a
+    // thread with nothing at or after `since` yields no item. Note for the consumer: the
+    // item's raw_text then holds the new messages (and the root, if Slack includes it),
+    // not the whole thread, so it must not replace a stored thread's text wholesale.
+    const channelNames = new Map(channels.map((c) => [c.id, c.name]));
+    for (let hi = 0; hi < hotThreads.length; hi++) {
+      const hot = hotThreads[hi]!;
+      if (items.length >= limit) {
+        cutByLimit = true;
+        break;
+      }
+      if (threadsRead.has(`${hot.channel}:${hot.ts}`)) continue; // read whole by the walk above
+      if (budgetSpent(startedAt, timeBudgetMs)) {
+        hotOutOfTime = hotThreads.length - hi;
+        break;
+      }
+      threadsScanned += 1;
+      try {
+        const replies = await slackPaged<SlackMessage>(
+          'conversations.replies',
+          opts.token,
+          { channel: hot.channel, ts: hot.ts, limit: String(SLACK_REPLIES_PAGE_SIZE), ...(sinceS !== undefined ? { oldest: String(sinceS) } : {}) },
+          'messages',
+          maxReplyPages,
+        );
+        if (replies.truncated) repliesCut += 1;
+        const rows = uniqueByTs(replies.rows);
+        if (sinceS !== undefined && !rows.some((m) => Number(m.ts) >= sinceS)) continue; // nothing new
+        const channel = { id: hot.channel, name: channelNames.get(hot.channel) ?? hot.channel };
+        const item = await slackThreadItem(channel, hot.ts, rows, resolveUser);
+        if (!item) {
+          noHumanThreads += 1;
+          continue;
+        }
+        items.push(item);
+      } catch {
+        threadsUnreadable += 1;
       }
     }
 
@@ -345,7 +496,11 @@ export class SlackFetcher implements ConnectorFetcher {
       });
     }
     if (historyCut > 0) {
-      skips.push({ kind: 'page_cap', count: historyCut, detail: `channels whose history was cut at ${maxHistoryPages} page(s) (raise maxHistoryPages)` });
+      skips.push({
+        kind: 'page_cap',
+        count: historyCut,
+        detail: `channels whose history was cut at ${maxHistoryPages} page(s), of ${channelsHistoryRead} channels read (raise maxHistoryPages)`,
+      });
     }
     if (repliesCut > 0) {
       skips.push({ kind: 'page_cap', count: repliesCut, detail: `threads whose replies were cut at ${maxReplyPages} page(s) (raise maxReplyPages)` });
@@ -356,6 +511,9 @@ export class SlackFetcher implements ConnectorFetcher {
         count: channelsOutOfTime,
         detail: `channels not scanned (the ${Math.round(timeBudgetMs / 60_000)} minute Slack time budget ran out)`,
       });
+    }
+    if (hotOutOfTime > 0) {
+      skips.push({ kind: 'time_budget', count: hotOutOfTime, detail: `hot threads not re-read (the ${Math.round(timeBudgetMs / 60_000)} minute Slack time budget ran out)` });
     }
     if (channelsUnreadable > 0) {
       skips.push({ kind: 'error', count: channelsUnreadable, detail: 'channels the token could not read' });
