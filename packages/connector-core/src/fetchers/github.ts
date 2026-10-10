@@ -271,6 +271,9 @@ export async function fetchGitHubDiscussion(items: FetcherItem[], opts: GitHubDi
   const parsed: Array<{ item: FetcherItem; repo: string; n: number; kind: ItemKind }> = [];
   let unreadable = 0;
   for (const item of items) {
+    // Not pending: its discussion is already in raw_text (or was never deferred), and
+    // appending again would double it. No request, and not counted as unreadable.
+    if (item.detail_pending !== true) continue;
     const p = parseGitHubItemUrl(item.source_url);
     if (p) parsed.push({ item, ...p });
     else unreadable += 1;

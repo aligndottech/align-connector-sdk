@@ -504,3 +504,39 @@ describe('a discussion section GitHub fails to return', () => {
     expect(out.skip).toMatchObject({ kind: 'error', count: 1, detail: expect.stringContaining('discussion') });
   });
 });
+
+describe('the discussion drain only touches items that are pending', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const itemOf = (over: Partial<FetcherItem>): FetcherItem => ({
+    source_url: 'https://github.com/o/r/issues/7',
+    platform: 'github',
+    raw_text: 'Flaky\n\nStatus: open\n\n## Comments\n[bob] (x):\nalready here',
+    title: 'Flaky',
+    ...over,
+  });
+
+  it('detail_pending:false and absent: no request, nothing returned, raw_text untouched', async () => {
+    const s = serve({});
+    const done = itemOf({ detail_pending: false });
+    const never = itemOf({});
+    const before = done.raw_text;
+    const out = await fetchGitHubDiscussion([done, never], { token: 't', maxRequests: 100 });
+    expect(s.urls).toEqual([]);
+    expect(out.items).toEqual([]);
+    expect(out.requests).toBe(0);
+    expect(done.raw_text).toBe(before);
+  });
+
+  it('a pending item is still drained, and the non-pending one beside it is not', async () => {
+    const s = serve({});
+    const out = await fetchGitHubDiscussion([itemOf({ detail_pending: true, raw_text: 'Flaky' }), itemOf({ source_url: 'https://github.com/o/r/issues/8', detail_pending: false })], {
+      token: 't',
+      maxRequests: 100,
+    });
+    expect(out.items.map((i) => i.source_url)).toEqual(['https://github.com/o/r/issues/7']);
+    expect(s.discussion()).toHaveLength(1);
+  });
+});
