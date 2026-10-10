@@ -113,6 +113,9 @@ const ATLASSIAN = { token: 'tok', cloudId: 'cid', siteBase: 'https://acme.atlass
  * Scope from what each fetcher reads today. 'yours' = filtered to the caller's own items
  * (author, assignee, involves, host); 'team' = everything the token can see, other people's included.
  */
+/** Fetchers that return the vendor's updated time (S2: github, gitlab, jira, linear). */
+const SETS_UPDATED_AT = new Set(['github', 'gitlab', 'jira', 'linear']);
+
 const EXPECTED_SCOPE: Record<string, 'yours' | 'team'> = {
   github: 'yours', // involves:/reviewed-by: the caller, with or without repo
   gitlab: 'yours', // author_id = the caller
@@ -159,9 +162,16 @@ describe.each(EVERY_FETCHER)('$platform report contract', ({ platform, build, op
     expect(report.complete).toBe(false);
   });
 
-  it('never invents a high water: no fetcher sets updated_at yet, so it is absent', async () => {
+  it('never invents a high water: it is the latest vendor updated_at returned, else absent', async () => {
     const { items, report } = await build(2).fetchWithReport!({ ...opts, limit: 50 });
-    expect(items.some((i) => i.updated_at !== undefined)).toBe(false);
-    expect(report.highWater).toBeUndefined();
+    if (SETS_UPDATED_AT.has(platform)) {
+      expect(items.length).toBeGreaterThan(0);
+      expect(items.every((i) => i.updated_at !== undefined)).toBe(true);
+      const latest = items.map((i) => Date.parse(i.updated_at!)).reduce((a, b) => Math.max(a, b));
+      expect(report.highWater).toBe(new Date(latest).toISOString());
+    } else {
+      expect(items.some((i) => i.updated_at !== undefined)).toBe(false);
+      expect(report.highWater).toBeUndefined();
+    }
   });
 });

@@ -42,7 +42,7 @@ export interface FetcherItem {
    * The source's own last-updated time for this item, ISO-8601 Z. It feeds
    * {@link FetchReport.highWater}, the watermark an incremental sync resumes from,
    * so the same rule as `created_at` holds: absent when the source did not say,
-   * never the fetch time. As of this version NO built-in fetcher sets it yet.
+   * never the fetch time. Set by the github, gitlab, jira and linear fetchers (S2).
    */
   updated_at?: string;
   /**
@@ -52,10 +52,17 @@ export interface FetcherItem {
    * instead of adding a second. Absent where several items can share a URL, and
    * wherever normaliseSourceKey returns undefined (a synthetic or fallback URL).
    *
-   * As of this version NO built-in fetcher sets it (the per-fetcher work lands next).
-   * A consumer that wants a key today calls normaliseSourceKey on `source_url` itself.
+   * Set by the github, gitlab, jira and linear fetchers (S2). For any other fetcher a
+   * consumer that wants a key calls normaliseSourceKey on `source_url` itself.
    */
   source_key?: string;
+  /**
+   * True when the item was returned whole but its discussion (comments, reviews) was
+   * deferred: GitHub's two-tier read (`discussion: 'none'`, or a time budget that ran out
+   * before the discussion pass). The item is still complete as an item; a consumer
+   * finishes it later (GitHub: `fetchGitHubDiscussion`). Absent or false: nothing pending.
+   */
+  detail_pending?: boolean;
 }
 
 /**
@@ -145,9 +152,8 @@ export interface FetchReport {
    * A consumer MUST NOT advance a watermark when this is absent, even on
    * `complete: true`, and MUST NOT substitute `now()`, `created_at` or the newest
    * item's position for it. `created_at` is not an updated time: an old item edited
-   * today would sit below a watermark built from it and never be re-read. As of this
-   * version no built-in fetcher sets `updated_at`, so this is always absent and no
-   * built-in fetch can advance a watermark yet.
+   * today would sit below a watermark built from it and never be re-read. Only the
+   * fetchers that set `updated_at` (github, gitlab, jira, linear as of S2) can produce one.
    */
   highWater?: string;
   /** The earliest `updated_at` among the returned items. Absent like `highWater`. */
@@ -171,6 +177,40 @@ export interface FetchResult {
   report: FetchReport;
 }
 
+/** Inputs to {@link FetchOne}. Per-provider extras (`cloudId`, `siteBase`, `domain`,
+ *  `email`) ride on the index signature exactly as they do for a list fetch.
+ *
+ *  SECURITY: `token` is a stored credential, and `cloudId`, `siteBase`, `domain` and any
+ *  other host-like option decide where it is sent. They MUST come from the connector's
+ *  stored configuration for this credential, never from the caller, an agent's tool
+ *  arguments, or the URL being captured. The consumer is an MCP tool: if an agent can
+ *  choose `domain`, it can send the token to a host it picks. fetchOne checks the URL
+ *  against these options; it cannot check the options themselves. */
+export interface FetchOneOptions {
+  token: string;
+  /** Wall-clock limit for the whole single-item read, ms. Default 3,000. Running out is a
+   *  `time_budget` skip. */
+  timeoutMs?: number;
+  [key: string]: unknown;
+}
+
+/** One of the two is set, except GitHub's partial read: an item whose discussion failed
+ *  comes back with `detail_pending: true` AND an `error` skip saying so. */
+export interface FetchOneResult {
+  item?: FetcherItem;
+  skip?: FetchSkip;
+}
+
+/**
+ * Single-item read for capture-from-URL. Built from the same item mapper the list fetch
+ * uses, so a captured item and an imported one carry identical fields. Never throws for
+ * a vendor error: 401/403 is an `auth` skip, 404 and other failures `error`, a timeout
+ * `time_budget`. A URL this fetcher does not recognise, or one on a host other than the
+ * one the token belongs to, is a `shape` skip made with NO request, so a token is never
+ * sent to a host taken from the URL.
+ */
+export type FetchOne = (url: string, opts: FetchOneOptions) => Promise<FetchOneResult>;
+
 export interface ConnectorFetcher {
   /** Single-shot read used by the CLI personal import. */
   fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]>;
@@ -183,4 +223,6 @@ export interface ConnectorFetcher {
    * exactly `(await fetchWithReport(opts)).items`.
    */
   fetchWithReport?(opts: ConnectorFetcherOptions): Promise<FetchResult>;
+  /** Optional single-item read for capture-from-URL. See {@link FetchOne}. */
+  fetchOne?: FetchOne;
 }

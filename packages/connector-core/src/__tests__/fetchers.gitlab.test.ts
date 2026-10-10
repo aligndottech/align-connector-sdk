@@ -27,6 +27,7 @@ describe('GitLabFetcher', () => {
         platform: 'gitlab',
         raw_text: 'Adopt Kafka\n\nqueue\n\nStatus: merged',
         title: 'Adopt Kafka',
+        source_key: 'https://gitlab.com/g/p/-/merge_requests/3',
       },
     ]);
     expect(mockFetch.mock.calls[0][0]).toBe('https://gitlab.com/api/v4/user');

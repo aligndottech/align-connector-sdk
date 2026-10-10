@@ -57,8 +57,16 @@ function loadFixture(platform: string): RecordedFixture {
   return JSON.parse(readFileSync(fixturePath(platform), 'utf8')) as RecordedFixture;
 }
 
+/**
+ * Fields added after the fixtures were recorded, stripped for the same reason as
+ * `created_at`: the phase that adds a field must not rewrite the contract it is judged
+ * against. `updated_at` and `source_key` (S2/S3) are asserted per fetcher in their own
+ * suites instead.
+ */
+const ADDED_FIELDS = new Set(['created_at', 'updated_at', 'source_key']);
+
 function stripCreatedAt(item: FetcherItem): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(item).filter(([k]) => k !== 'created_at'));
+  return Object.fromEntries(Object.entries(item).filter(([k]) => !ADDED_FIELDS.has(k)));
 }
 
 const GOLDEN_CASES: Array<{ platform: string; build: () => ConnectorFetcher; opts: ConnectorFetcherOptions }> = [

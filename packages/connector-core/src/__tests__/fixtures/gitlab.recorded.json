@@ -19,7 +19,8 @@
         "author": {
           "id": 42,
           "username": "ada"
-        }
+        },
+        "updated_at": "2026-01-09T10:05:00.000Z"
       },
       {
         "id": 2,
@@ -33,7 +34,8 @@
         "author": {
           "id": 42,
           "username": "ada"
-        }
+        },
+        "updated_at": "2026-01-11T10:05:00.000Z"
       }
     ]
   },

@@ -9,14 +9,20 @@ import { ZoomFetcher } from './zoom.js';
 import { LinearFetcher } from './linear.js';
 import { NotionFetcher } from './notion.js';
 
-export { GitHubFetcher } from './github.js';
-export { GitLabFetcher } from './gitlab.js';
-export { JiraFetcher } from './jira.js';
+export {
+  GitHubFetcher,
+  fetchGitHubDiscussion,
+  type GitHubFetcherOptions,
+  type GitHubDiscussionOptions,
+  type GitHubDiscussionResult,
+} from './github.js';
+export { GitLabFetcher, type GitLabFetcherOptions } from './gitlab.js';
+export { JiraFetcher, buildJiraJql, type JiraFetcherOptions } from './jira.js';
 export { ConfluenceFetcher } from './confluence.js';
 export { SlackFetcher } from './slack.js';
 export { TeamsFetcher } from './teams.js';
 export { ZoomFetcher } from './zoom.js';
-export { LinearFetcher } from './linear.js';
+export { LinearFetcher, linearRequestsPerHour, type LinearFetcherOptions } from './linear.js';
 export { NotionFetcher } from './notion.js';
 export { GitFetcher, type GitCommitSource, type GitCommitHistory, type GitCommit } from './git.js';
 export { buildCommitUrl, formatCommitAsText } from './util/git.js';
