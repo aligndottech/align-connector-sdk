@@ -9,6 +9,7 @@ import { serve } from './helpers/statusFetch.js';
 import { capOption } from '../fetchers/util/since.js';
 import { TeamsFetcher } from '../fetchers/teams.js';
 import { NotionFetcher } from '../fetchers/notion.js';
+import { ConfluenceFetcher } from '../fetchers/confluence.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
 const mockFetch = vi.mocked(fetch);
@@ -173,5 +174,67 @@ describe('N3. capOption: floored, clamped to a ceiling, and a fallback is said o
     expect(out.item).toBeDefined();
     expect(out.item).not.toHaveProperty('partial');
     expect(out.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/maxBlockPages/) }]);
+  });
+});
+
+describe('N4. list reads and their lookups never follow a redirect', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  const R302 = { __status: 302, headers: { location: 'https://evil.com/steal' } };
+  const allManual = () => {
+    expect(mockFetch.mock.calls.length).toBeGreaterThan(0); // positive control for the loop below
+    for (const [u, init] of mockFetch.mock.calls) {
+      expect(String(u)).not.toContain('evil.com');
+      expect((init as { redirect?: string } | undefined)?.redirect, String(u)).toBe('manual');
+    }
+  };
+
+  it('Confluence: the page listing, the space lookup and the author lookup', async () => {
+    serve(mockFetch, {
+      '/api/v2/spaces?keys=': { results: [{ id: '1', key: 'ENG' }] },
+      '/api/v2/spaces/1/pages': { results: [{ id: '9', title: 'A', authorId: 'acc', version: { createdAt: '2026-05-05T00:00:00Z' }, _links: { webui: '/p/9' } }], _links: {} },
+      '/rest/api/user': R302,
+    });
+    const { items } = await new ConfluenceFetcher().fetchWithReport({ token: 't', cloudId: 'c', siteBase: 'https://acme.atlassian.net', spaces: ['ENG'] });
+    expect(items[0]).not.toHaveProperty('author'); // the redirected lookup gave nothing
+    allManual();
+  });
+
+  it('Confluence: a redirected page listing fails the read rather than following', async () => {
+    serve(mockFetch, { '/api/v2/pages': R302 });
+    await expect(new ConfluenceFetcher().fetchWithReport({ token: 't', cloudId: 'c', siteBase: 'https://acme.atlassian.net' })).rejects.toThrow(/302/);
+    allManual();
+  });
+
+  it('Notion: search, blocks (a redirect is an unreadable body) and the user lookup', async () => {
+    const ID = '0123456789abcdef0123456789abcdef';
+    serve(mockFetch, {
+      '/v1/search': { results: [{ id: ID, url: `https://www.notion.so/${ID}`, created_by: { id: 'u1' }, properties: {} }], has_more: false },
+      '/v1/blocks/': R302,
+      '/v1/users/': R302,
+    });
+    const { items, report } = await new NotionFetcher().fetchWithReport({ token: 't' });
+    expect(items[0]!.partial).toBe(true);
+    expect(report.skips).toContainEqual(expect.objectContaining({ kind: 'error', count: 1 }));
+    allManual();
+  });
+
+  it('Slack: a redirected channel history is a counted error skip, and every call is manual', async () => {
+    serve(mockFetch, {
+      'auth.test': { ok: true },
+      'conversations.list': { ok: true, channels: [{ id: 'C1', name: 'a' }] },
+      'conversations.history': R302,
+    });
+    const { report } = await new SlackFetcher().fetchWithReport({ token: 't', interChannelDelayMs: 0 });
+    expect(report.skips).toEqual([{ kind: 'error', count: 1, detail: expect.stringMatching(/channels the token could not read/) }]);
+    allManual();
+  });
+
+  it('Zoom: the recordings listing', async () => {
+    serve(mockFetch, { '/users/me/recordings': R302 });
+    await expect(new ZoomFetcher().fetchWithReport({ token: 't', daysBack: 1 })).rejects.toThrow(/302/);
+    allManual();
   });
 });

@@ -47,7 +47,7 @@ function makeConfluenceUserResolver(base: string, headers: Record<string, string
       const url = `${base}/rest/api/user?accountId=${encodeURIComponent(accountId)}`;
       // With a signal (fetchOne) the lookup is bounded by the read's timeout and an abort
       // is rethrown, so the read reports time_budget rather than finishing late.
-      const res = signal ? await fetch(url, fetchOneInit(headers, signal)) : await fetch(url, { headers });
+      const res = signal ? await fetch(url, fetchOneInit(headers, signal)) : await fetch(url, { headers, redirect: 'manual' });
       if (!res.ok) {
         cache.set(accountId, null);
         return undefined;
@@ -197,7 +197,7 @@ export class ConfluenceFetcher implements ConnectorFetcher {
         const res = await fetch(
           `${base}/api/v2/spaces?keys=${spaces.map(encodeURIComponent).join(',')}&limit=250` +
             (spaceCursor ? `&cursor=${encodeURIComponent(spaceCursor)}` : ''),
-          { headers },
+          { headers, redirect: 'manual' },
         );
         if (!res.ok) throw await providerError('Confluence', res, { forbidden });
         const data = (await res.json()) as { results?: Array<{ id: string; key: string }>; _links?: { next?: string } };
@@ -244,7 +244,8 @@ export class ConfluenceFetcher implements ConnectorFetcher {
         const url =
           `${base}${listing.path}?sort=-modified-date&limit=${CONFLUENCE_PAGE_MAX}&body-format=storage` +
           (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
-        const res = await fetch(url, { headers });
+        // redirect: manual everywhere: a 3xx is a non-OK answer, never a hop carrying the token.
+        const res = await fetch(url, { headers, redirect: 'manual' });
         if (!res.ok) throw await providerError('Confluence', res, { forbidden });
         const data = (await res.json()) as { results?: ConfluencePageV2[]; _links?: { base?: string; next?: string } };
         linkBase = linkBase ?? data._links?.base ?? `${humanBase}/wiki`;

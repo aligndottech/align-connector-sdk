@@ -137,6 +137,7 @@ function encodeMeetingUuid(uuid: string): string {
 async function zoomGet<T>(path: string, token: string): Promise<T> {
   const res = await fetch(`https://api.zoom.us/v2${path}`, {
     headers: { Authorization: `Bearer ${token}` },
+    redirect: 'manual', // a 3xx is a failed call, never a hop carrying the token
   });
   if (!res.ok) throw await providerError('Zoom', res);
   return res.json() as Promise<T>;

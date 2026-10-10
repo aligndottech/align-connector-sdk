@@ -29,10 +29,15 @@ async function slackGet(
   const url = `https://slack.com/api/${endpoint}?${qs}`;
   const headers = { Authorization: `Bearer ${token}` };
   // With a signal this is a fetchOne read: bounded, no redirects, capped body.
-  const data = (signal ? await jsonOrThrow(await fetch(url, fetchOneInit(headers, signal))) : await (await fetch(url, { headers })).json()) as Record<
-    string,
-    unknown
-  >;
+  let data: Record<string, unknown>;
+  if (signal) {
+    data = (await jsonOrThrow(await fetch(url, fetchOneInit(headers, signal)))) as Record<string, unknown>;
+  } else {
+    // redirect: manual: a 3xx is a failed call, never a hop carrying the token.
+    const res = await fetch(url, { headers, redirect: 'manual' });
+    if (res.status >= 300 && res.status < 400) throw new Error(`Slack API ${endpoint} answered HTTP ${res.status} (redirect not followed)`);
+    data = (await res.json()) as Record<string, unknown>;
+  }
   if (!data.ok) {
     // Slack answers HTTP 200 with ok:false and an error code; these codes are its 401.
     const code = String(data.error);

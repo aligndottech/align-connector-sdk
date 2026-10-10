@@ -47,7 +47,7 @@ function makeNotionUserResolver(headers: Record<string, string>, signal?: AbortS
     if (cache.has(userId)) return cache.get(userId) ?? undefined;
     try {
       const url = `https://api.notion.com/v1/users/${userId}`;
-      const res = signal ? await fetch(url, fetchOneInit(headers, signal)) : await fetch(url, { headers });
+      const res = signal ? await fetch(url, fetchOneInit(headers, signal)) : await fetch(url, { headers, redirect: 'manual' });
       if (!res.ok) {
         cache.set(userId, null);
         return undefined;
@@ -118,7 +118,7 @@ async function notionItem(
       const blocksUrl =
         `https://api.notion.com/v1/blocks/${page.id}/children?page_size=${NOTION_BLOCK_PAGE_MAX}` +
         (cursor ? `&start_cursor=${encodeURIComponent(cursor)}` : '');
-      const blocksRes = signal ? await fetch(blocksUrl, fetchOneInit(headers, signal)) : await fetch(blocksUrl, { headers });
+      const blocksRes = signal ? await fetch(blocksUrl, fetchOneInit(headers, signal)) : await fetch(blocksUrl, { headers, redirect: 'manual' });
       if (!blocksRes.ok) {
         bodyUnreadable = true;
         break;
@@ -225,6 +225,7 @@ export class NotionFetcher implements ConnectorFetcher {
       const searchRes = await fetch('https://api.notion.com/v1/search', {
         method: 'POST',
         headers,
+        redirect: 'manual',
         body: JSON.stringify({
           filter: { value: 'page', property: 'object' },
           // Search has no date filter, so a window is newest first plus a client-side
