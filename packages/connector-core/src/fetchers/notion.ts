@@ -3,7 +3,7 @@ import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOp
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
 import { buildFetchReport, refusedRead } from './util/report.js';
-import { budgetSpent, capOption, DescendingWindow } from './util/since.js';
+import { budgetSpent, capOption, DescendingWindow, optionSkips, withOptionSkips } from './util/since.js';
 import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 
@@ -35,6 +35,7 @@ const NOTION_PAGE_MAX = 100;
 /** Notion's maximum page of block children, and how many such pages a page's body reads. */
 const NOTION_BLOCK_PAGE_MAX = 100;
 const NOTION_MAX_BLOCK_PAGES = 10;
+const NOTION_BLOCK_PAGE_CEILING = 100;
 
 /** Resolve a Notion user id to a name (cached). Degrades to undefined on failure. With a
  *  `signal` (fetchOne) the lookup is bounded by it, and an abort is rethrown so the
@@ -183,12 +184,13 @@ export class NotionFetcher implements ConnectorFetcher {
     return guardFetchOne('Notion', opts.timeoutMs, async (signal) => {
       const headers = notionHeaders(opts.token);
       const page = await jsonOrThrow<NotionPage>(await fetch(`https://api.notion.com/v1/pages/${id}`, fetchOneInit(headers, signal)));
-      const maxBlockPages = capOption(opts.maxBlockPages, NOTION_MAX_BLOCK_PAGES);
+      const blockCap = capOption('maxBlockPages', opts.maxBlockPages, NOTION_MAX_BLOCK_PAGES, NOTION_BLOCK_PAGE_CEILING);
+      const maxBlockPages = blockCap.value;
       const { item, bodyUnreadable, blocksCut } = await notionItem(page, headers, makeNotionUserResolver(headers, signal), maxBlockPages, signal);
       const skips: FetchSkip[] = [];
       if (bodyUnreadable) skips.push({ kind: 'error', count: 1, detail: 'page body could not be read (title only)' });
       if (blocksCut) skips.push({ kind: 'page_cap', count: 1, detail: `page blocks cut at ${maxBlockPages} page(s) of ${NOTION_BLOCK_PAGE_MAX} (raise maxBlockPages)` });
-      return skips.length ? { item, skips } : { item };
+      return withOptionSkips(skips.length ? { item, skips } : { item }, [blockCap]);
     });
   }
 
@@ -208,7 +210,8 @@ export class NotionFetcher implements ConnectorFetcher {
     let scanned = 0;
     let bodiesUnreadable = 0;
     let bodiesCut = 0;
-    const maxBlockPages = capOption(opts.maxBlockPages, NOTION_MAX_BLOCK_PAGES);
+    const blockCap = capOption('maxBlockPages', opts.maxBlockPages, NOTION_MAX_BLOCK_PAGES, NOTION_BLOCK_PAGE_CEILING);
+    const maxBlockPages = blockCap.value;
     let cursor: string | undefined;
     let cutByLimit = false;
     let reachedSince = false;
@@ -268,6 +271,7 @@ export class NotionFetcher implements ConnectorFetcher {
     if (outOfTime) {
       skips.push({ kind: 'time_budget', count: 1, detail: `page search stopped before its end (the ${opts.timeBudgetMs} ms time budget ran out)` });
     }
+    skips.push(...optionSkips([blockCap]));
     // Read to the end, or to the first page older than `since`, with nothing the limit cut.
     const exhausted = (reachedSince || cursor === undefined) && !cutByLimit && !outOfTime;
     return { items, report: buildFetchReport(items, { platform: 'notion', scanned, requested: limit, skips, scope: 'team', untilMs: win.untilMs, exhausted }) };

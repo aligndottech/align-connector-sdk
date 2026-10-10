@@ -3,7 +3,7 @@ import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOp
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError } from './errors.js';
 import { buildFetchReport, refusedRead } from './util/report.js';
-import { budgetSpent, capOption } from './util/since.js';
+import { budgetSpent, capOption, optionSkips, withOptionSkips } from './util/since.js';
 import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, parseUrl, shapeSkip, urlForDetail, vendorMessage, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
@@ -78,6 +78,9 @@ interface SlackChannel {
 const SLACK_MAX_CHANNELS = 200;
 const SLACK_MAX_HISTORY_PAGES = 5; // ~5,000 messages inside the daysBack window
 const SLACK_MAX_REPLY_PAGES = 3; // ~3,000 messages in one thread
+/** The most a caller may raise a cap to: pages per conversation, and channels. */
+const SLACK_PAGE_CEILING = 100;
+const SLACK_CHANNEL_CEILING = 1000;
 
 /**
  * Page sizes at each endpoint's documented maximum: "under 1000" for list and
@@ -294,8 +297,9 @@ export class SlackFetcher implements ConnectorFetcher {
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parsePermalink(url);
     if (!link) return shapeSkip(`Slack URL not read: not a message permalink on a slack.com host: ${urlForDetail(url)}`);
-    const maxReplyPages = capOption(opts.maxReplyPages, SLACK_MAX_REPLY_PAGES);
-    return guardFetchOne('Slack', opts.timeoutMs, async (signal) => {
+    const replyCap = capOption('maxReplyPages', opts.maxReplyPages, SLACK_MAX_REPLY_PAGES, SLACK_PAGE_CEILING);
+    const maxReplyPages = replyCap.value;
+    return withOptionSkips(await guardFetchOne('Slack', opts.timeoutMs, async (signal) => {
       try {
         const info = await slackGet('conversations.info', opts.token, { channel: link.channel }, signal);
         const channel = { id: link.channel, name: (info.channel as { name?: string } | undefined)?.name ?? link.channel };
@@ -321,7 +325,7 @@ export class SlackFetcher implements ConnectorFetcher {
         }
         throw e;
       }
-    });
+    }), [replyCap]);
   }
 
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
@@ -332,9 +336,12 @@ export class SlackFetcher implements ConnectorFetcher {
     const limit = opts.limit ?? 50;
     const daysBack = (opts.daysBack as number | undefined) ?? 90;
     const delayMs = (opts.interChannelDelayMs as number | undefined) ?? 3000;
-    const maxChannels = (opts.maxChannels as number | undefined) ?? SLACK_MAX_CHANNELS;
-    const maxHistoryPages = (opts.maxHistoryPages as number | undefined) ?? SLACK_MAX_HISTORY_PAGES;
-    const maxReplyPages = capOption(opts.maxReplyPages, SLACK_MAX_REPLY_PAGES);
+    const caps = [
+      capOption('maxChannels', opts.maxChannels, SLACK_MAX_CHANNELS, SLACK_CHANNEL_CEILING),
+      capOption('maxHistoryPages', opts.maxHistoryPages, SLACK_MAX_HISTORY_PAGES, SLACK_PAGE_CEILING),
+      capOption('maxReplyPages', opts.maxReplyPages, SLACK_MAX_REPLY_PAGES, SLACK_PAGE_CEILING),
+    ];
+    const [maxChannels, maxHistoryPages, maxReplyPages] = caps.map((c) => c.value) as [number, number, number];
     const timeBudgetMs = (opts.timeBudgetMs as number | undefined) ?? SLACK_TIME_BUDGET_MS;
     const startedAt = Date.now();
     // `oldest` bounds conversations.history by the thread ROOT's ts, so a reply added
@@ -552,6 +559,8 @@ export class SlackFetcher implements ConnectorFetcher {
     if (threadsUnreadable > 0) {
       skips.push({ kind: 'error', count: threadsUnreadable, detail: 'threads whose replies could not be read' });
     }
+
+    skips.push(...optionSkips(caps));
 
     return {
       items,

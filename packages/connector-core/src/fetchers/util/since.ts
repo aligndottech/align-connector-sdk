@@ -69,10 +69,39 @@ export function budgetSpent(startedAt: number, budgetMs: number | undefined): bo
   return budgetMs !== undefined && Date.now() - startedAt > budgetMs;
 }
 
+/** A page cap read from options, and what to say when the caller's value was not used. */
+export interface CapResult {
+  value: number;
+  /** Set when the caller's value was invalid (fell back) or above the ceiling (clamped). */
+  note?: string;
+}
+
 /**
- * A page cap from options: a finite whole number of at least 1, else the default. NaN,
- * Infinity, 0 and negatives would otherwise read nothing or read forever, silently.
+ * A page cap from options. Absent: the default, silently. A finite number of at least 1:
+ * floored (1.9 reads 1), and clamped to `ceiling`. Anything else (NaN, Infinity, 0,
+ * negatives, a numeric STRING such as '5'): the default. A fallback or a clamp sets
+ * `note`, which the fetcher reports as a `shape` skip (see {@link optionSkips}) and does not
+ * fail the read: a cap the caller did not get must be said, never silent.
  */
-export function capOption(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
+export function capOption(name: string, value: unknown, fallback: number, ceiling: number): CapResult {
+  if (value === undefined) return { value: fallback };
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 1) {
+    return { value: fallback, note: `${name} ${String(value)} is not a whole number of at least 1; used ${fallback}` };
+  }
+  const v = Math.floor(value);
+  if (v > ceiling) return { value: ceiling, note: `${name} ${value} is above the ceiling ${ceiling}; used ${ceiling}` };
+  return { value: v };
+}
+
+/** One `shape` skip naming every option that fell back or was clamped, or none. */
+export function optionSkips(caps: CapResult[]): FetchSkip[] {
+  const notes = caps.map((c) => c.note).filter((n): n is string => n !== undefined);
+  return notes.length ? [{ kind: 'shape', count: notes.length, detail: `options not used as given: ${notes.join('; ')}` }] : [];
+}
+
+/** A fetchOne result with the option skips added beside its item (never without one). */
+export function withOptionSkips<R extends { item?: unknown; skips?: FetchSkip[] }>(result: R, caps: CapResult[]): R {
+  const extra = optionSkips(caps);
+  if (!result.item || extra.length === 0) return result;
+  return { ...result, skips: [...(result.skips ?? []), ...extra] };
 }

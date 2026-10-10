@@ -6,6 +6,9 @@ import { fetch } from 'undici';
 import { ZoomFetcher } from '../fetchers/zoom.js';
 import { SlackFetcher } from '../fetchers/slack.js';
 import { serve } from './helpers/statusFetch.js';
+import { capOption } from '../fetchers/util/since.js';
+import { TeamsFetcher } from '../fetchers/teams.js';
+import { NotionFetcher } from '../fetchers/notion.js';
 
 vi.mock('undici', () => ({ fetch: vi.fn() }));
 const mockFetch = vi.mocked(fetch);
@@ -109,5 +112,66 @@ describe('N2. Slack threads trimmed at until are partial and counted', () => {
     const { items, report } = await read();
     expect(items[0]).not.toHaveProperty('partial');
     expect(report.skips).toEqual([]);
+  });
+});
+
+describe('N3. capOption: floored, clamped to a ceiling, and a fallback is said out loud', () => {
+  it.each([
+    [undefined, 3, undefined],
+    [5, 5, undefined],
+    [1.9, 1, undefined],
+    [100, 100, undefined],
+    [1e9, 100, /above the ceiling 100/],
+    [0, 3, /not a whole number of at least 1/],
+    [-1, 3, /not a whole number of at least 1/],
+    [0.5, 3, /not a whole number of at least 1/],
+    ['5', 3, /not a whole number of at least 1/],
+    [Number.NaN, 3, /not a whole number of at least 1/],
+    [Number.POSITIVE_INFINITY, 3, /not a whole number of at least 1/],
+  ])('%s -> %s', (value, expected, note) => {
+    const r = capOption('maxReplyPages', value, 3, 100);
+    expect(r.value).toBe(expected);
+    if (note) expect(r.note).toMatch(note);
+    else expect(r.note).toBeUndefined();
+    if (note) expect(r.note).toContain('maxReplyPages');
+  });
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('Slack list: invalid maxChannels and maxHistoryPages fall back, read on, and one shape skip names both', async () => {
+    const { calls } = serve(mockFetch, {
+      'auth.test': { ok: true },
+      'conversations.list': { ok: true, channels: [{ id: 'C1', name: 'a' }, { id: 'C2', name: 'b' }] },
+      'conversations.history': { ok: true, messages: [], response_metadata: { next_cursor: 'P1' } },
+      'conversations.history & cursor=P1': { ok: true, messages: [] },
+    });
+    const { report } = await new SlackFetcher().fetchWithReport({ token: 't', interChannelDelayMs: 0, maxChannels: Number.NaN, maxHistoryPages: 0 });
+    expect(calls.filter((c) => c.url.includes('conversations.history'))).toHaveLength(4); // 2 channels x 2 pages: defaults applied
+    const opt = report.skips.filter((k) => k.kind === 'shape');
+    expect(opt).toEqual([{ kind: 'shape', count: 2, detail: expect.stringMatching(/maxChannels.*maxHistoryPages/) }]);
+    expect(report.complete).toBe(true); // a fallback does not fail the read
+  });
+
+  it('Slack list: maxChannels 1e9 is clamped to 1000 and said', async () => {
+    serve(mockFetch, { 'auth.test': { ok: true }, 'conversations.list': { ok: true, channels: [] } });
+    const { report } = await new SlackFetcher().fetchWithReport({ token: 't', interChannelDelayMs: 0, maxChannels: 1e9 });
+    expect(report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/maxChannels .*above the ceiling 1000/) }]);
+  });
+
+  it('Teams list: an invalid maxMessagePages is said', async () => {
+    serve(mockFetch, { '/me/joinedTeams': { value: [] } });
+    const { report } = await new TeamsFetcher().fetchWithReport({ token: 't', maxMessagePages: '5' });
+    expect(report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/maxMessagePages/) }]);
+  });
+
+  it('Notion fetchOne: an invalid maxBlockPages is said beside the item', async () => {
+    const ID = '0123456789abcdef0123456789abcdef';
+    serve(mockFetch, { [`/v1/pages/${ID}`]: { id: ID, properties: {} }, '/v1/blocks/': { results: [] } });
+    const out = await new NotionFetcher().fetchOne(`https://www.notion.so/${ID}`, { token: 't', maxBlockPages: -1 });
+    expect(out.item).toBeDefined();
+    expect(out.item).not.toHaveProperty('partial');
+    expect(out.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringMatching(/maxBlockPages/) }]);
   });
 });

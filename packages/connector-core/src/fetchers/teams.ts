@@ -3,7 +3,7 @@ import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOp
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError, providerError, refusedBody } from './errors.js';
 import { buildFetchReport, refusedRead } from './util/report.js';
-import { budgetSpent, capOption, DescendingWindow } from './util/since.js';
+import { budgetSpent, capOption, DescendingWindow, optionSkips, withOptionSkips } from './util/since.js';
 import { parseWindow } from './util/time.js';
 import { fetchOneInit, guardFetchOne, jsonOrThrow, shapeSkip, urlForDetail, vendorUrl } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
@@ -14,6 +14,8 @@ const TEAMS_PAGE_MAX = 50;
 const TEAMS_MAX_MESSAGE_PAGES = 20;
 /** Reply pages read per thread by fetchOne (list replies, $top <= 50). */
 const TEAMS_MAX_REPLY_PAGES = 20;
+/** The most a caller may raise a page cap to. */
+const TEAMS_PAGE_CEILING = 100;
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -180,8 +182,9 @@ export class TeamsFetcher implements ConnectorFetcher {
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parseMessageLink(url);
     if (!link) return shapeSkip(`Teams URL not read: not a channel message link with a valid team and channel id: ${urlForDetail(url)}`);
-    const maxReplyPages = capOption(opts.maxReplyPages, TEAMS_MAX_REPLY_PAGES);
-    return guardFetchOne('Teams', opts.timeoutMs, async (signal) => {
+    const replyCap = capOption('maxReplyPages', opts.maxReplyPages, TEAMS_MAX_REPLY_PAGES, TEAMS_PAGE_CEILING);
+    const maxReplyPages = replyCap.value;
+    return withOptionSkips(await guardFetchOne('Teams', opts.timeoutMs, async (signal) => {
       const headers = { Authorization: `Bearer ${opts.token}` };
       const get = async <T>(pathOrNext: string): Promise<T> => {
         // A nextLink is only followed on Graph's own host; anything else ends the read.
@@ -208,7 +211,7 @@ export class TeamsFetcher implements ConnectorFetcher {
         item: { ...item, partial: true },
         skips: [{ kind: 'page_cap', count: 1, detail: `thread replies cut at ${maxReplyPages} page(s) of ${TEAMS_PAGE_MAX} (raise maxReplyPages)` }],
       };
-    });
+    }), [replyCap]);
   }
 
   async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
@@ -220,7 +223,8 @@ export class TeamsFetcher implements ConnectorFetcher {
     const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
     if (!win.ok) return refusedRead({ platform: 'teams', requested: limit, scope: 'team', detail: win.detail });
 
-    const maxPages = capOption(opts.maxMessagePages, TEAMS_MAX_MESSAGE_PAGES);
+    const pageCap = capOption('maxMessagePages', opts.maxMessagePages, TEAMS_MAX_MESSAGE_PAGES, TEAMS_PAGE_CEILING);
+    const maxPages = pageCap.value;
     const startedAt = Date.now();
     const teams = await graphGet<{ value: TeamsTeam[] }>('/me/joinedTeams', opts.token);
     const items: FetcherItem[] = [];
@@ -321,6 +325,8 @@ export class TeamsFetcher implements ConnectorFetcher {
     if (channelsRefused > 0) {
       skips.push({ kind: 'auth', count: channelsRefused, detail: 'channels where Teams refused the token (it may have expired: reconnect Teams)' });
     }
+
+    skips.push(...optionSkips([pageCap]));
 
     return {
       items,

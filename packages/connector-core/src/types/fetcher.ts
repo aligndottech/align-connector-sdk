@@ -224,8 +224,10 @@ export interface FetchOneOptions {
 export interface FetchOneResult {
   item?: FetcherItem;
   skip?: FetchSkip;
-  /** Only beside an `item`: what the read left out (a reply cap that fired). The item is
-   *  then `partial: true`. Absent when the item is whole. */
+  /** Only beside an `item`: what the read left out (a cap that fired, or a body it could
+   *  not read: the item is then `partial: true`) or set aside (a `shape` skip naming an
+   *  option that fell back to its default; the item can still be whole). Absent when the
+   *  item is whole and every option was used as given. */
   skips?: FetchSkip[];
 }
 

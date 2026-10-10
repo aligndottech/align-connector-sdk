@@ -307,7 +307,11 @@ describe('7. page caps refuse nonsense values; Confluence space keys are deduped
   it.each([Number.NaN, 0, -1, Number.POSITIVE_INFINITY, 'lots'])('Slack fetchOne maxReplyPages %s falls back to the default cap of 3', async (cap) => {
     slackThread();
     const out = await new SlackFetcher().fetchOne('https://acme.slack.com/archives/C1/p1700000000123456', { token: 't', maxReplyPages: cap });
-    expect(out.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 3 page/) }]);
+    // The fallback is said (N3), beside the cap that fired.
+    expect(out.skips).toEqual([
+      { kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 3 page/) },
+      { kind: 'shape', count: 1, detail: expect.stringMatching(/maxReplyPages/) },
+    ]);
   });
 
   it.each([Number.NaN, 0, Number.POSITIVE_INFINITY])('Teams fetchOne maxReplyPages %s falls back to the default cap', async (cap) => {
@@ -320,7 +324,10 @@ describe('7. page caps refuse nonsense values; Confluence space keys are deduped
       { token: 't', maxReplyPages: cap },
     );
     n = mockFetch.mock.calls.length;
-    expect(out.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) }]);
+    expect(out.skips).toEqual([
+      { kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) },
+      { kind: 'shape', count: 1, detail: expect.stringMatching(/maxReplyPages/) },
+    ]);
     expect(n).toBe(21); // the message, then exactly 20 reply pages
   });
 
@@ -331,7 +338,10 @@ describe('7. page caps refuse nonsense values; Confluence space keys are deduped
       ...graphChain(25, '/teams/T1/channels/C/messages'),
     });
     const { report } = await new TeamsFetcher().fetchWithReport({ token: 't', maxMessagePages: Number.NaN });
-    expect(report.skips).toEqual([{ kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) }]);
+    expect(report.skips).toEqual([
+      { kind: 'page_cap', count: 1, detail: expect.stringMatching(/cut at 20 page/) },
+      { kind: 'shape', count: 1, detail: expect.stringMatching(/maxMessagePages/) },
+    ]);
   });
 
   it('a space key given twice is looked up and read once', async () => {
