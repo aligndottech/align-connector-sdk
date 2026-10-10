@@ -10,7 +10,7 @@ import type {
 } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
-import { buildFetchReport } from './util/report.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { type Clock, SlidingWindowLimiter, deadlineFrom, pastDeadline, realClock } from './util/pace.js';
 import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorUrl } from './util/single.js';
@@ -63,6 +63,9 @@ const PARALLEL_DISCUSSION_FETCHES = 5;
 const MAX_SECTION_CHARS = 4000;
 
 const API = 'https://api.github.com';
+
+/** `owner/repo`, nothing else: it is spliced into a search query. */
+const REPO_NAME = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 function headersFor(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
@@ -342,6 +345,17 @@ export class GitHubFetcher implements ConnectorFetcher {
     const deadline = deadlineFrom(opts.timeBudgetMs, clock);
     const headers = headersFor(opts.token);
 
+    // `repo` goes into the search query as a qualifier, so anything but a plain
+    // owner/repo (a space, a `+`, a second qualifier) would widen the search past it.
+    if (opts.repo !== undefined && !REPO_NAME.test(opts.repo)) {
+      return refusedRead({
+        platform: 'github',
+        requested: opts.limit ?? 100,
+        scope: opts.scope === 'team' ? 'team' : 'yours',
+        detail: 'repo is not an owner/repo name (letters, digits, dot, dash, underscore); nothing was searched',
+      });
+    }
+
     const userRes = await fetch(`${API}/user`, { headers });
     if (!userRes.ok) {
       throw await providerError('GitHub', userRes, { forbidden: 'Check the token has the repo scope, or read access to the repositories.' });
@@ -364,18 +378,18 @@ export class GitHubFetcher implements ConnectorFetcher {
     let issueSearch: Promise<{ rows: GitHubSearchItem[]; exhausted: boolean }>;
     if (team) {
       // Team scope: everyone's items in the named repo, by updated date. No involves:.
-      prSearches = [readSearch((s) => `repo:${opts.repo}${dated(s)}+type:pr`, slices, ctx, limit)];
-      issueSearch = readSearch((s) => `repo:${opts.repo}${dated(s)}+type:issue`, slices, ctx, limit);
+      prSearches = [readSearch((s) => `repo:${encodeURIComponent(opts.repo!)}${dated(s)}+type:pr`, slices, ctx, limit)];
+      issueSearch = readSearch((s) => `repo:${encodeURIComponent(opts.repo!)}${dated(s)}+type:issue`, slices, ctx, limit);
     } else {
       // ALI-917: unscoped by default (every repo the token can see) - `opts.repo` narrows
       // to one `owner/repo` via GitHub's own search qualifier, so the filtering happens
       // server-side rather than fetching everything and discarding client-side.
-      const repoQualifier = opts.repo ? `+repo:${opts.repo}` : '';
+      const repoQualifier = opts.repo ? `+repo:${encodeURIComponent(opts.repo)}` : '';
       prSearches = [
-        readSearch((s) => `involves:${user.login}+type:pr${repoQualifier}${dated(s)}`, slices, ctx, limit),
-        readSearch((s) => `reviewed-by:${user.login}+type:pr${repoQualifier}${dated(s)}`, slices, ctx, limit),
+        readSearch((s) => `involves:${encodeURIComponent(user.login)}+type:pr${repoQualifier}${dated(s)}`, slices, ctx, limit),
+        readSearch((s) => `reviewed-by:${encodeURIComponent(user.login)}+type:pr${repoQualifier}${dated(s)}`, slices, ctx, limit),
       ];
-      issueSearch = readSearch((s) => `involves:${user.login}+type:issue${repoQualifier}${dated(s)}`, slices, ctx, limit);
+      issueSearch = readSearch((s) => `involves:${encodeURIComponent(user.login)}+type:issue${repoQualifier}${dated(s)}`, slices, ctx, limit);
     }
     const [issues, ...prs] = await Promise.all([issueSearch, ...prSearches]);
 

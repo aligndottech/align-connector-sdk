@@ -1,4 +1,4 @@
-import type { FetcherItem, FetchReport, FetchSkip } from '../../types/fetcher.js';
+import type { FetcherItem, FetchReport, FetchResult, FetchSkip } from '../../types/fetcher.js';
 import { toIsoOrUndefined } from './time.js';
 
 /**
@@ -55,5 +55,19 @@ export function buildFetchReport(items: FetcherItem[], parts: FetchReportParts):
     complete,
     ...(high !== undefined ? { highWater: new Date(high).toISOString() } : {}),
     ...(low !== undefined ? { oldestReached: new Date(low).toISOString() } : {}),
+  };
+}
+
+/**
+ * The result of a read refused before any request, because an input is not usable (a
+ * repo that is not `owner/repo`, a `since` that is not a date). Nothing was read, so it
+ * is never `complete`, even though the skip kind is `shape`: the report says which input
+ * to fix, and a consumer must not advance a watermark on it.
+ */
+export function refusedRead(parts: { platform: string; requested: number; scope: FetchReport['scope']; detail: string }): FetchResult {
+  const { detail, ...rest } = parts;
+  return {
+    items: [],
+    report: buildFetchReport([], { ...rest, scanned: 0, skips: [{ kind: 'shape', count: 1, detail }], exhausted: false }),
   };
 }
