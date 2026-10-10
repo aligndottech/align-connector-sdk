@@ -1,10 +1,10 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip } from '../types/fetcher.js';
-import { providerError, providerErrorText } from './errors.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
+import { providerError } from './errors.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip, statusSkip, type FetchOneResult } from './util/single.js';
+import { guardFetchOne, shapeSkip, statusSkip } from './util/single.js';
 import { confluencePageId, normaliseSourceKey } from '../sourceKey.js';
 
 // Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
@@ -128,11 +128,11 @@ export class ConfluenceFetcher implements ConnectorFetcher {
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const id = confluencePageId(url);
-    if (!id) return shapeSkip('Confluence', url, 'no page id');
+    if (!id) return shapeSkip(`Confluence URL not readable as one item (no page id): ${url}`);
     const t = confluenceTarget(opts, new URL(url).host);
     return guardFetchOne('Confluence', opts.timeoutMs, async (signal) => {
       const res = await fetch(`${t.base}/api/v2/pages/${id}?body-format=storage`, { headers: t.headers, signal });
-      if (!res.ok) return statusSkip('Confluence', res.status, await providerErrorText(res));
+      if (!res.ok) return statusSkip('Confluence', res.status);
       const page = (await res.json()) as ConfluencePageV2;
       const linkBase = page._links?.base ?? `${t.humanBase}/wiki`;
       return { item: await confluenceItem(page, linkBase, makeConfluenceUserResolver(t.base, t.headers)) };

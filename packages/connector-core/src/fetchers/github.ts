@@ -1,22 +1,29 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
+import type {
+  ConnectorFetcher,
+  ConnectorFetcherOptions,
+  FetcherItem,
+  FetchOneOptions,
+  FetchOneResult,
+  FetchResult,
+  FetchSkip,
+} from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
-
-interface GitHubSearchItem {
-  html_url: string;
-  title: string;
-  body: string | null;
-  state: string;
-  /** When it was opened. Uniform across PRs and issues, unlike merged_at. */
-  created_at?: string;
-  number?: number;
-  repository_url?: string;
-  user?: { login: string; html_url: string };
-  /** Present (possibly with merged_at: null) only when the item is a PR. */
-  pull_request?: { merged_at: string | null };
-}
+import { normaliseSourceKey } from '../sourceKey.js';
+import { type Clock, SlidingWindowLimiter, deadlineFrom, pastDeadline, realClock } from './util/pace.js';
+import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorUrl } from './util/single.js';
+import {
+  type DaySlice,
+  type GitHubSearchItem,
+  GH_SEARCHES_PER_MINUTE,
+  monthSlices,
+  newSearchContext,
+  readSearch,
+  searchSkips,
+  updatedQualifier,
+} from './githubSearch.js';
 
 interface DiscussionEntry {
   body: string | null;
@@ -26,9 +33,22 @@ interface DiscussionEntry {
   state?: string;
 }
 
-// GitHub's Search API returns at most 100 results/page and 1000 total (10 pages).
-const GH_PER_PAGE_MAX = 100;
-const GH_SEARCH_MAX_PAGES = 10;
+/**
+ * GitHub-specific read options. `repo` (ALI-917) narrows the caller's own searches to one
+ * `owner/repo` and keeps `scope: 'yours'`; `scope: 'team'` WITH `repo` reads everyone's PRs
+ * and issues in that repo. Team scope is opt-in rather than implied by `repo` because the
+ * CLI already passes `repo` by default as a personal narrowing, and widening that silently
+ * would import other people's items without the disclosure the consumer owes them.
+ */
+export interface GitHubFetcherOptions extends ConnectorFetcherOptions {
+  /** 'full' (default): fetch each item's comments and reviews now. 'none': items only,
+   *  each fetchable item marked `detail_pending`, for {@link fetchGitHubDiscussion} later. */
+  discussion?: 'none' | 'full';
+  /** 'team' takes effect only with `repo`; otherwise the read stays the caller's own. */
+  scope?: 'yours' | 'team';
+  /** Test seam for pacing and the time budget. */
+  clock?: Clock;
+}
 
 // How many items may have their discussion (comments/reviews) in flight at
 // once. Each item costs up to 3 extra requests (issue comments, PR reviews,
@@ -42,48 +62,10 @@ const PARALLEL_DISCUSSION_FETCHES = 5;
 // bot dump, a copy-pasted log) can't blow the whole item's extraction budget.
 const MAX_SECTION_CHARS = 4000;
 
-interface SearchOutcome {
-  rows: GitHubSearchItem[];
-  /** True only when a short page said the results ran out and GitHub called them complete. */
-  exhausted: boolean;
-  /** GitHub answered a page with `incomplete_results: true` (its search timed out). */
-  incomplete: boolean;
-  /** Results the 1,000-result ceiling left unread, when it ended the loop; else 0. */
-  pastCeiling: number;
-}
+const API = 'https://api.github.com';
 
-/** Page through a GitHub search query until `target` items are collected (or the
- *  results run out / the 1000-result ceiling is hit). A failed page, the target, the
- *  ceiling or an `incomplete_results` answer all leave `exhausted` false. */
-async function searchAll(query: string, headers: Record<string, string>, target: number): Promise<SearchOutcome> {
-  const out: GitHubSearchItem[] = [];
-  let exhausted = false;
-  let incomplete = false;
-  let lastFull = false;
-  let totalCount: number | undefined;
-  let page = 1;
-  for (; out.length < target && page <= GH_SEARCH_MAX_PAGES; page++) {
-    const perPage = Math.min(target - out.length, GH_PER_PAGE_MAX);
-    const res = await fetch(`${query}&sort=updated&per_page=${perPage}&page=${page}`, { headers });
-    if (!res.ok) {
-      lastFull = false;
-      break;
-    }
-    const data = (await res.json()) as { items?: GitHubSearchItem[]; total_count?: number; incomplete_results?: boolean };
-    if (data.incomplete_results === true) incomplete = true;
-    if (typeof data.total_count === 'number') totalCount = data.total_count;
-    const batch = data.items ?? [];
-    out.push(...batch);
-    lastFull = batch.length >= perPage;
-    if (!lastFull) {
-      exhausted = !incomplete; // last page
-      break;
-    }
-  }
-  // The loop ran out of pages (not of results, not of target) on a full page: the ceiling.
-  const ceilingHit = lastFull && page > GH_SEARCH_MAX_PAGES && out.length < target;
-  const pastCeiling = ceilingHit ? Math.max((totalCount ?? out.length + 1) - out.length, 1) : 0;
-  return { rows: out.slice(0, target), exhausted, incomplete, pastCeiling };
+function headersFor(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
 }
 
 /** Alternate between two ordered lists (PRs, issues) so neither can crowd the
@@ -141,78 +123,192 @@ function formatEntries(entries: DiscussionEntry[], withState: boolean): string[]
     });
 }
 
-/** Fetch one discussion endpoint, tolerating a failed or throwing request so
- *  one bad section never drops an otherwise-good item (ALI-805: the argument
- *  is a bonus on top of the announcement, not a requirement for it). */
+/** One discussion endpoint. `ok` is false when it failed or threw: the list fetch
+ *  tolerates that (ALI-805: the argument is a bonus on top of the announcement, not a
+ *  requirement for it); the background drain does not, and leaves the item pending. */
 async function fetchSection(
   url: string,
   headers: Record<string, string>,
   heading: string,
   withState: boolean,
-): Promise<string> {
+  counter?: { requests: number },
+  oneShot?: { signal: AbortSignal },
+): Promise<{ text: string; ok: boolean }> {
+  if (counter) counter.requests += 1;
   try {
-    const res = await fetch(url, { headers });
-    if (!res.ok) return '';
-    const entries = (await res.json()) as DiscussionEntry[];
-    return capSection(heading, formatEntries(entries, withState));
+    // fetchOne (oneShot): no redirect is followed and the body is capped, as for its item read.
+    const res = oneShot ? await fetch(url, fetchOneInit(headers, oneShot.signal)) : await fetch(url, { headers });
+    if (!res.ok) return { text: '', ok: false };
+    let entries: DiscussionEntry[];
+    if (oneShot) {
+      const body = await readJsonCapped<DiscussionEntry[]>(res);
+      if (!body.ok) return { text: '', ok: false };
+      entries = body.value;
+    } else {
+      entries = (await res.json()) as DiscussionEntry[];
+    }
+    return { text: capSection(heading, formatEntries(entries, withState)), ok: true };
   } catch {
-    return '';
+    return { text: '', ok: false };
   }
+}
+
+type ItemKind = 'pr' | 'issue';
+
+/** Requests one item's discussion costs: issue comments, plus PR reviews and review comments. */
+const discussionCost = (kind: ItemKind) => (kind === 'pr' ? 3 : 1);
+
+/**
+ * Comments and reviews for one item. Sequential, not Promise.all: GitHub's own
+ * best-practices guidance is to make requests serially rather than concurrently to avoid
+ * secondary rate limiting. PARALLEL_DISCUSSION_FETCHES already bounds how many ITEMS run
+ * at once - firing 3 more requests concurrently per item would undo that bound.
+ */
+async function fetchDiscussion(
+  kind: ItemKind,
+  repo: string,
+  n: number,
+  headers: Record<string, string>,
+  counter?: { requests: number },
+  oneShot?: { signal: AbortSignal },
+): Promise<{ text: string; failed: boolean }> {
+  const sections =
+    kind === 'pr'
+      ? [
+          [`${API}/repos/${repo}/issues/${n}/comments?per_page=20`, 'Comments', false],
+          [`${API}/repos/${repo}/pulls/${n}/reviews?per_page=20`, 'Code Reviews', true],
+          [`${API}/repos/${repo}/pulls/${n}/comments?per_page=20`, 'Review Comments', false],
+        ] as const
+      : ([[`${API}/repos/${repo}/issues/${n}/comments?per_page=20`, 'Comments', false]] as const);
+  let text = '';
+  let failed = false;
+  for (const [url, heading, withState] of sections) {
+    const out = await fetchSection(url, headers, heading, withState, counter, oneShot);
+    text += out.text;
+    if (!out.ok) failed = true;
+  }
+  return { text, failed };
 }
 
 function repoOf(item: GitHubSearchItem): string {
   return (item.repository_url ?? '').replace('https://api.github.com/repos/', '');
 }
 
-async function buildPrItem(pr: GitHubSearchItem, headers: Record<string, string>): Promise<FetcherItem> {
-  const repo = repoOf(pr);
-  const status = pr.pull_request?.merged_at ? 'merged' : pr.state;
-  let rawText = `${pr.title}\n\n${pr.body ?? ''}\n\nStatus: ${status}\nRepo: ${repo}`.trim();
-
-  if (repo && pr.number != null) {
-    // Sequential, not Promise.all: GitHub's own best-practices guidance is
-    // to make requests serially rather than concurrently to avoid secondary
-    // rate limiting. PARALLEL_DISCUSSION_FETCHES already bounds how many
-    // ITEMS run at once - firing 3 more requests concurrently per item would
-    // undo that bound (5 items x 3 requests = 15 requests in flight).
-    rawText += await fetchSection(`https://api.github.com/repos/${repo}/issues/${pr.number}/comments?per_page=20`, headers, 'Comments', false);
-    rawText += await fetchSection(`https://api.github.com/repos/${repo}/pulls/${pr.number}/reviews?per_page=20`, headers, 'Code Reviews', true);
-    rawText += await fetchSection(`https://api.github.com/repos/${repo}/pulls/${pr.number}/comments?per_page=20`, headers, 'Review Comments', false);
+/** The text an item carries before its discussion. One writer, shared by the list fetch,
+ *  the drain and fetchOne, so all three produce the same raw_text. */
+function baseText(row: GitHubSearchItem, kind: ItemKind): string {
+  if (kind === 'pr') {
+    const status = row.pull_request?.merged_at ? 'merged' : row.state;
+    return `${row.title}\n\n${row.body ?? ''}\n\nStatus: ${status}\nRepo: ${repoOf(row)}`.trim();
   }
+  return `${row.title}\n\n${row.body ?? ''}\n\nStatus: ${row.state}`.trim();
+}
 
-  const createdAt = toIsoOrUndefined(pr.created_at);
+/** The item mapper. `discussion` undefined means not fetched: pending when it could be. */
+function toItem(row: GitHubSearchItem, kind: ItemKind, discussion: string | undefined): FetcherItem {
+  const createdAt = toIsoOrUndefined(row.created_at);
+  const updatedAt = toIsoOrUndefined(row.updated_at);
+  const sourceKey = normaliseSourceKey('github', row.html_url);
+  const fetchable = Boolean(repoOf(row)) && row.number != null;
   return {
-    source_url: pr.html_url,
+    source_url: row.html_url,
     platform: 'github',
-    raw_text: rawText,
-    title: pr.title,
+    raw_text: baseText(row, kind) + (discussion ?? ''),
+    title: row.title,
     ...(createdAt ? { created_at: createdAt } : {}),
-    ...(pr.user ? { author: { name: pr.user.login, handle: pr.user.login, url: pr.user.html_url } } : {}),
+    ...(updatedAt ? { updated_at: updatedAt } : {}),
+    ...(sourceKey ? { source_key: sourceKey } : {}),
+    ...(row.user ? { author: { name: row.user.login, handle: row.user.login, url: row.user.html_url } } : {}),
+    ...(discussion === undefined && fetchable ? { detail_pending: true } : {}),
   };
 }
 
-async function buildIssueItem(issue: GitHubSearchItem, headers: Record<string, string>): Promise<FetcherItem> {
-  const repo = repoOf(issue);
-  let rawText = `${issue.title}\n\n${issue.body ?? ''}\n\nStatus: ${issue.state}`.trim();
+/**
+ * `owner/repo`, number and kind from a PR or issue URL on github.com
+ * (`/o/r/pull/12`, `/o/r/issues/7`) or api.github.com (`/repos/o/r/pulls/12`), else
+ * undefined. The host is checked by {@link vendorUrl}; GitHub Enterprise is not read.
+ */
+function parseGitHubItemUrl(url: string): { repo: string; n: number; kind: ItemKind } | undefined {
+  const u = vendorUrl(url, ['github.com', 'api.github.com']);
+  if (!u) return undefined;
+  const seg = '([A-Za-z0-9_.-]+)';
+  const m =
+    u.hostname.toLowerCase() === 'github.com'
+      ? new RegExp(`^/${seg}/${seg}/(pull|issues)/(\\d+)(?:/.*)?$`).exec(u.pathname)
+      : new RegExp(`^/repos/${seg}/${seg}/(pulls|issues)/(\\d+)/?$`).exec(u.pathname);
+  if (!m) return undefined;
+  return { repo: `${m[1]}/${m[2]}`, n: Number(m[4]), kind: m[3] === 'issues' ? 'issue' : 'pr' };
+}
 
-  if (repo && issue.number != null) {
-    rawText += await fetchSection(
-      `https://api.github.com/repos/${repo}/issues/${issue.number}/comments?per_page=20`,
-      headers,
-      'Comments',
-      false,
-    );
+export interface GitHubDiscussionOptions {
+  token: string;
+  /** Request budget for this drain: an item is started only when its whole cost fits. */
+  maxRequests: number;
+}
+
+export interface GitHubDiscussionResult {
+  /** The items whose discussion was read in full, raw_text extended, detail_pending false. */
+  items: FetcherItem[];
+  /** page_cap: items the budget did not reach; error: items a section failed for (still
+   *  pending); shape: inputs that are not a github.com PR or issue URL. */
+  skips: FetchSkip[];
+  /** Requests actually sent. */
+  requests: number;
+}
+
+/**
+ * The second tier (Decision 27): read comments and reviews for items an earlier
+ * `discussion: 'none'` fetch returned with `detail_pending: true`, newest `updated_at`
+ * first, and stop before `maxRequests`. Pass each item as the list fetch returned it: the
+ * discussion is appended to its raw_text, so passing an already-enriched item doubles it.
+ * An item a section failed for is not returned, so it stays pending for the next drain.
+ */
+export async function fetchGitHubDiscussion(items: FetcherItem[], opts: GitHubDiscussionOptions): Promise<GitHubDiscussionResult> {
+  const headers = headersFor(opts.token);
+  const parsed: Array<{ item: FetcherItem; repo: string; n: number; kind: ItemKind }> = [];
+  let unreadable = 0;
+  for (const item of items) {
+    const p = parseGitHubItemUrl(item.source_url);
+    if (p) parsed.push({ item, ...p });
+    else unreadable += 1;
   }
-
-  const createdAt = toIsoOrUndefined(issue.created_at);
-  return {
-    source_url: issue.html_url,
-    platform: 'github',
-    raw_text: rawText,
-    title: issue.title,
-    ...(createdAt ? { created_at: createdAt } : {}),
-    ...(issue.user ? { author: { name: issue.user.login, handle: issue.user.login, url: issue.user.html_url } } : {}),
+  const at = (i: FetcherItem) => {
+    const ms = Date.parse(i.updated_at ?? '');
+    return Number.isNaN(ms) ? -Infinity : ms;
   };
+  parsed.sort((a, b) => at(b.item) - at(a.item));
+
+  let reserved = 0;
+  let reached = 0;
+  for (const p of parsed) {
+    if (reserved + discussionCost(p.kind) > opts.maxRequests) break;
+    reserved += discussionCost(p.kind);
+    reached += 1;
+  }
+  const plan = parsed.slice(0, reached);
+  const counter = { requests: 0 };
+  const results = await mapWithConcurrency(plan, PARALLEL_DISCUSSION_FETCHES, async (p) => ({
+    p,
+    out: await fetchDiscussion(p.kind, p.repo, p.n, headers, counter),
+  }));
+
+  const enriched: FetcherItem[] = [];
+  let failed = 0;
+  for (const { p, out } of results) {
+    if (out.failed) {
+      failed += 1;
+      continue;
+    }
+    enriched.push({ ...p.item, raw_text: p.item.raw_text + out.text, detail_pending: false });
+  }
+  const skips: FetchSkip[] = [];
+  const unreached = parsed.length - reached;
+  if (unreached > 0) {
+    skips.push({ kind: 'page_cap', count: unreached, detail: `items whose discussion was not read: the request budget of ${opts.maxRequests} ran out` });
+  }
+  if (failed > 0) skips.push({ kind: 'error', count: failed, detail: 'items whose discussion GitHub failed to return; they stay pending' });
+  if (unreadable > 0) skips.push({ kind: 'shape', count: unreadable, detail: 'items that are not a github.com pull request or issue URL' });
+  return { items: enriched, skips, requests: counter.requests };
 }
 
 /**
@@ -231,67 +327,112 @@ async function buildIssueItem(issue: GitHubSearchItem, headers: Record<string, s
  * review bodies, and inline review comments - not just the title and body.
  * That is where the "why" usually lives: the body says what changed, the
  * thread is where someone objects and the author agrees or pushes back.
+ *
+ * S2: with `since` the read is a window by updated date, sliced under GitHub's
+ * 1,000-result ceiling; `discussion: 'none'` defers the per-item discussion to
+ * {@link fetchGitHubDiscussion}; `scope: 'team'` with `repo` reads the whole repo.
  */
 export class GitHubFetcher implements ConnectorFetcher {
-  async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+  async fetch(opts: GitHubFetcherOptions): Promise<FetcherItem[]> {
     return (await this.fetchWithReport(opts)).items;
   }
 
-  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
-    const headers = {
-      Authorization: `Bearer ${opts.token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    };
+  async fetchWithReport(opts: GitHubFetcherOptions): Promise<FetchResult> {
+    const clock = opts.clock ?? realClock;
+    const deadline = deadlineFrom(opts.timeBudgetMs, clock);
+    const headers = headersFor(opts.token);
 
-    const userRes = await fetch('https://api.github.com/user', { headers });
+    const userRes = await fetch(`${API}/user`, { headers });
     if (!userRes.ok) {
       throw await providerError('GitHub', userRes, { forbidden: 'Check the token has the repo scope, or read access to the repositories.' });
     }
     const user = (await userRes.json()) as { login: string };
 
     const limit = opts.limit ?? 100;
-    // ALI-917: unscoped by default (every repo the token can see, unchanged since ALI-805) -
-    // `opts.repo` narrows to one `owner/repo` via GitHub's own search qualifier, so the
-    // filtering happens server-side rather than fetching everything and discarding client-side.
-    const repoQualifier = opts.repo ? `+repo:${opts.repo}` : '';
+    const team = opts.scope === 'team' && Boolean(opts.repo);
+    const slices: DaySlice[] | undefined = opts.since ? monthSlices(opts.since, opts.until, clock.now()) : undefined;
+    const dated = (slice: DaySlice | undefined) => (slice ? `+${updatedQualifier(slice)}` : '');
+    const ctx = newSearchContext({
+      headers,
+      limiter: new SlidingWindowLimiter(GH_SEARCHES_PER_MINUTE, 60_000, clock),
+      clock,
+      ...(deadline !== undefined ? { deadline } : {}),
+      ...(opts.repo ? { repo: opts.repo } : {}),
+    });
 
-    const [involvesPrs, reviewedPrs, issues] = await Promise.all([
-      searchAll(`https://api.github.com/search/issues?q=involves:${user.login}+type:pr${repoQualifier}`, headers, limit),
-      searchAll(`https://api.github.com/search/issues?q=reviewed-by:${user.login}+type:pr${repoQualifier}`, headers, limit),
-      searchAll(`https://api.github.com/search/issues?q=involves:${user.login}+type:issue${repoQualifier}`, headers, limit),
-    ]);
+    let prSearches: Array<Promise<{ rows: GitHubSearchItem[]; exhausted: boolean }>>;
+    let issueSearch: Promise<{ rows: GitHubSearchItem[]; exhausted: boolean }>;
+    if (team) {
+      // Team scope: everyone's items in the named repo, by updated date. No involves:.
+      prSearches = [readSearch((s) => `repo:${opts.repo}${dated(s)}+type:pr`, slices, ctx, limit)];
+      issueSearch = readSearch((s) => `repo:${opts.repo}${dated(s)}+type:issue`, slices, ctx, limit);
+    } else {
+      // ALI-917: unscoped by default (every repo the token can see) - `opts.repo` narrows
+      // to one `owner/repo` via GitHub's own search qualifier, so the filtering happens
+      // server-side rather than fetching everything and discarding client-side.
+      const repoQualifier = opts.repo ? `+repo:${opts.repo}` : '';
+      prSearches = [
+        readSearch((s) => `involves:${user.login}+type:pr${repoQualifier}${dated(s)}`, slices, ctx, limit),
+        readSearch((s) => `reviewed-by:${user.login}+type:pr${repoQualifier}${dated(s)}`, slices, ctx, limit),
+      ];
+      issueSearch = readSearch((s) => `involves:${user.login}+type:issue${repoQualifier}${dated(s)}`, slices, ctx, limit);
+    }
+    const [issues, ...prs] = await Promise.all([issueSearch, ...prSearches]);
 
     // involves: and reviewed-by: can both return the same PR (e.g. you
     // authored it AND someone else reviewed you on it too) - dedupe before
     // the item ever reaches the discussion-fetch stage.
     const prByUrl = new Map<string, GitHubSearchItem>();
-    for (const pr of [...involvesPrs.rows, ...reviewedPrs.rows]) prByUrl.set(pr.html_url, pr);
+    for (const pr of prs.flatMap((p) => p.rows)) prByUrl.set(pr.html_url, pr);
 
-    const rows = interleave([...prByUrl.values()], issues.rows, limit);
-    const searches = [involvesPrs, reviewedPrs, issues];
-    const exhausted = searches.every((s) => s.exhausted) && rows.length === prByUrl.size + issues.rows.length;
-    const skips: FetchSkip[] = [];
-    const pastCeiling = searches.reduce((n, s) => n + s.pastCeiling, 0);
-    if (pastCeiling > 0) {
-      skips.push({ kind: 'vendor_cap', count: pastCeiling, detail: "search results past GitHub's 1,000-result search ceiling, not read" });
-    }
-    const incomplete = searches.filter((s) => s.incomplete).length;
-    if (incomplete > 0) {
-      skips.push({
-        kind: 'vendor_cap',
-        count: incomplete,
-        detail: 'searches GitHub answered with incomplete_results (its search timed out, so results may be missing)',
-      });
-    }
+    const rows = interleave([...prByUrl.values()], issues!.rows, limit);
+    const searches = [issues!, ...prs];
+    const exhausted = searches.every((s) => s.exhausted) && rows.length === prByUrl.size + issues!.rows.length;
+    const skips: FetchSkip[] = searchSkips(ctx, opts.timeBudgetMs);
 
-    const items = await mapWithConcurrency(rows, PARALLEL_DISCUSSION_FETCHES, (r) =>
-      r.kind === 'pr' ? buildPrItem(r.row, headers) : buildIssueItem(r.row, headers),
-    );
-    // Scope stays 'yours' with `repo`: the queries are still involves:/reviewed-by: the caller.
+    const items = await mapWithConcurrency(rows, PARALLEL_DISCUSSION_FETCHES, async (r) => {
+      // Discussion is the second tier: deferred by choice ('none'), or because the time
+      // budget ran out. Either way the item itself is whole and says detail_pending, so
+      // the drain can finish it; no skip, because nothing was left unread at item level.
+      if (opts.discussion === 'none' || pastDeadline(deadline, clock)) return toItem(r.row, r.kind, undefined);
+      const repo = repoOf(r.row);
+      if (!repo || r.row.number == null) return toItem(r.row, r.kind, '');
+      return toItem(r.row, r.kind, (await fetchDiscussion(r.kind, repo, r.row.number, headers)).text);
+    });
     return {
       items,
-      report: buildFetchReport(items, { platform: 'github', scanned: rows.length, requested: limit, skips, scope: 'yours', exhausted }),
+      report: buildFetchReport(items, {
+        platform: 'github',
+        scanned: rows.length,
+        requested: limit,
+        skips,
+        scope: team ? 'team' : 'yours',
+        exhausted,
+      }),
     };
+  }
+
+  /** Capture from a URL: one PR or issue, with its full discussion (about 4 requests). */
+  async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
+    const target = parseGitHubItemUrl(url);
+    if (!target) return shapeSkip('URL is not a github.com pull request or issue');
+    const timeoutMs = opts.timeoutMs ?? FETCH_ONE_TIMEOUT_MS;
+    const headers = headersFor(opts.token);
+    const signal = AbortSignal.timeout(timeoutMs);
+    try {
+      // Built from the parsed ids on the fixed API host, never the pasted URL. The issues
+      // endpoint answers for PRs too, in the same shape search returns, so the list
+      // fetch's mapper applies unchanged (https://docs.github.com/en/rest/issues/issues#get-an-issue).
+      const res = await fetch(`${API}/repos/${target.repo}/issues/${target.n}`, fetchOneInit(headers, signal));
+      if (!res.ok) return statusSkip('GitHub', res.status);
+      const body = await readJsonCapped<GitHubSearchItem>(res);
+      if (!body.ok) return tooLargeSkip('GitHub');
+      const row = body.value;
+      const kind: ItemKind = row.pull_request ? 'pr' : 'issue';
+      const discussion = await fetchDiscussion(kind, target.repo, target.n, headers, undefined, { signal });
+      return { item: toItem(row, kind, discussion.text) };
+    } catch (err) {
+      return thrownSkip('GitHub', err, timeoutMs);
+    }
   }
 }

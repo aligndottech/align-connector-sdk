@@ -1,10 +1,9 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, sinceMs } from './util/since.js';
-import type { FetchOneResult } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
 interface ZoomRecordingFile {

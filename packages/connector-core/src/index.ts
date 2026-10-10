@@ -28,6 +28,7 @@ export type {
   DecisionAuthor,
   FetchOne,
   FetchOneOptions,
+  FetchOneResult,
 } from './types/fetcher.js';
 
 // Report contract helpers and the cross-surface item identity (one table, one function).
@@ -57,6 +58,16 @@ export {
   type GitCommitSource,
   type GitCommitHistory,
   type GitCommit,
+  // S2
+  fetchGitHubDiscussion,
+  buildJiraJql,
+  linearRequestsPerHour,
+  type GitHubFetcherOptions,
+  type GitHubDiscussionOptions,
+  type GitHubDiscussionResult,
+  type GitLabFetcherOptions,
+  type JiraFetcherOptions,
+  type LinearFetcherOptions,
 } from './fetchers/index.js';
 
 // Utils

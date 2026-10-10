@@ -1,10 +1,10 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError, providerError, refusedBody } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip, type FetchOneResult } from './util/single.js';
+import { guardFetchOne, shapeSkip } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
 /** Graph's documented maximum page for list channel messages. */
@@ -159,7 +159,7 @@ export class TeamsFetcher implements ConnectorFetcher {
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parseMessageLink(url);
-    if (!link) return shapeSkip('Teams', url, 'not a channel message link with a groupId');
+    if (!link) return shapeSkip(`Teams URL not readable as one item (not a channel message link with a groupId): ${url}`);
     return guardFetchOne('Teams', opts.timeoutMs, async (signal) => {
       const base = `/teams/${link.teamId}/channels/${link.channelId}/messages/${link.messageId}`;
       const msg = await graphGet<TeamsMessage>(base, opts.token, signal);

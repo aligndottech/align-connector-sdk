@@ -1,10 +1,10 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
-import { providerError, providerErrorText } from './errors.js';
+import { providerError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, DescendingWindow, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip, statusSkip, type FetchOneResult } from './util/single.js';
+import { guardFetchOne, shapeSkip, statusSkip } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
 interface NotionPage {
@@ -141,11 +141,11 @@ export class NotionFetcher implements ConnectorFetcher {
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const id = notionPageId(url);
-    if (!id) return shapeSkip('Notion', url, 'no page id');
+    if (!id) return shapeSkip(`Notion URL not readable as one item (no page id): ${url}`);
     return guardFetchOne('Notion', opts.timeoutMs, async (signal) => {
       const headers = notionHeaders(opts.token);
       const res = await fetch(`https://api.notion.com/v1/pages/${id}`, { headers, signal });
-      if (!res.ok) return statusSkip('Notion', res.status, await providerErrorText(res));
+      if (!res.ok) return statusSkip('Notion', res.status);
       const page = (await res.json()) as NotionPage;
       const { item } = await notionItem(page, headers, makeNotionUserResolver(headers), signal);
       return { item };

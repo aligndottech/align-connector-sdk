@@ -1,10 +1,10 @@
 import { fetch } from 'undici';
-import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip } from '../types/fetcher.js';
+import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchOneOptions, FetchResult, FetchSkip, FetchOneResult } from '../types/fetcher.js';
 import { toIsoOrUndefined } from './util/time.js';
 import { FetcherAuthError } from './errors.js';
 import { buildFetchReport } from './util/report.js';
 import { budgetSpent, sinceMs } from './util/since.js';
-import { guardFetchOne, shapeSkip, type FetchOneResult } from './util/single.js';
+import { guardFetchOne, shapeSkip } from './util/single.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 
 /** A Slack `ok:false` answer, carrying its error code so a caller can classify it. */
@@ -292,7 +292,7 @@ export class SlackFetcher implements ConnectorFetcher {
    */
   async fetchOne(url: string, opts: FetchOneOptions): Promise<FetchOneResult> {
     const link = parsePermalink(url);
-    if (!link) return shapeSkip('Slack', url, 'not a message permalink');
+    if (!link) return shapeSkip(`Slack URL not readable as one item (not a message permalink): ${url}`);
     return guardFetchOne('Slack', opts.timeoutMs, async (signal) => {
       try {
         const info = await slackGet('conversations.info', opts.token, { channel: link.channel }, signal);
