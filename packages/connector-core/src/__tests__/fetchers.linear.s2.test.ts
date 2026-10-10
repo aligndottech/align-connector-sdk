@@ -181,3 +181,35 @@ describe('Linear fetchOne', () => {
     },
   );
 });
+
+describe('Linear hostile or odd answers', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('a 200 with no connection in it is a shape skip and not complete, never a quiet empty read', async () => {
+    serve(() => ({ body: { data: {} } }));
+    const { items, report } = await new LinearFetcher().fetchWithReport({ token: 'lin_api_x' });
+    expect(items).toEqual([]);
+    expect(report.complete).toBe(false);
+    expect(report.skips).toEqual([{ kind: 'shape', count: 2, detail: expect.stringContaining('connection') }]);
+  });
+
+  const LONG = `Argument Validation Error lin_api_SECRETSECRETSECRET1234 ${'x'.repeat(400)}`;
+
+  it('fetchOne: a long GraphQL error message is capped and a token-like string is removed from the skip', async () => {
+    serve(() => ({ body: { errors: [{ message: LONG }], data: { issue: null } } }));
+    const { skip } = await new LinearFetcher().fetchOne('https://linear.app/acme/issue/ENG-1', { token: 'lin_api_x' });
+    expect(skip!.kind).toBe('error');
+    expect(skip!.detail).not.toContain('SECRETSECRET');
+    expect(skip!.detail.length).toBeLessThan(200);
+  });
+
+  it('the list fetch: the thrown first-page error message is capped and cleaned the same way', async () => {
+    serve(() => ({ body: { errors: [{ message: LONG }] } }));
+    const err = await new LinearFetcher().fetchWithReport({ token: 'lin_api_x' }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toContain('SECRETSECRET');
+    expect((err as Error).message.length).toBeLessThan(200);
+  });
+});
