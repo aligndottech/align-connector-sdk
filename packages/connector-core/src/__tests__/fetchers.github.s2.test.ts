@@ -540,3 +540,33 @@ describe('the discussion drain only touches items that are pending', () => {
     expect(s.discussion()).toHaveLength(1);
   });
 });
+
+describe('GitHub repo length and the empty repo', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it.each([`${'o'.repeat(40)}/r`, `o/${'r'.repeat(101)}`])('%j is over the owner (39) or repo (100) cap: shape skip, no search', async (repo) => {
+    const s = serve({});
+    const { report } = await new GitHubFetcher().fetchWithReport({ token: 't', repo });
+    expect(report.complete).toBe(false);
+    expect(report.skips[0]).toMatchObject({ kind: 'shape' });
+    expect(s.searches()).toHaveLength(0);
+  });
+
+  it('the longest allowed owner and repo still search', async () => {
+    const s = serve({});
+    const repo = `${'o'.repeat(39)}/${'r'.repeat(100)}`;
+    await new GitHubFetcher().fetchWithReport({ token: 't', repo });
+    expect(s.searches().length).toBeGreaterThan(0);
+    expect(s.searches().every((q) => q.includes(`repo:${repo}`))).toBe(true);
+  });
+
+  it("repo '' means no repo: the unscoped search runs, as with parseWindow's empty bounds", async () => {
+    const s = serve({});
+    const { report } = await new GitHubFetcher().fetchWithReport({ token: 't', repo: '', scope: 'team' });
+    expect(report.scope).toBe('yours');
+    expect(s.searches().length).toBeGreaterThan(0);
+    expect(s.searches().join(' ')).not.toContain('repo:');
+  });
+});
