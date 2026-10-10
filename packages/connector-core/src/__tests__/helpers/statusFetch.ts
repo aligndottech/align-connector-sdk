@@ -9,6 +9,8 @@ import type { Mock } from 'vitest';
 export interface StatusRoute {
   __status: number;
   body?: unknown;
+  /** Response headers, e.g. `{ location: 'https://...' }` for a 3xx. */
+  headers?: Record<string, string>;
 }
 
 export function serve(mockFetch: Mock, responses: Record<string, unknown>): { calls: Array<{ url: string; body: string }>; unmatched: string[] } {
@@ -29,9 +31,11 @@ export function serve(mockFetch: Mock, responses: Record<string, unknown>): { ca
     const r = hit.body as Partial<StatusRoute> | undefined;
     const status = r && typeof r === 'object' && '__status' in r ? (r.__status as number) : 200;
     const payload = r && typeof r === 'object' && '__status' in r ? r.body : hit.body;
+    const headers = (r && typeof r === 'object' && '__status' in r ? r.headers : undefined) ?? {};
     return {
       ok: status >= 200 && status < 300,
       status,
+      headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
       json: async () => payload,
       text: async () => (typeof payload === 'string' ? payload : JSON.stringify(payload ?? '')),
     };

@@ -8,6 +8,50 @@ import { parseWindow } from './util/time.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { parseUrl, vendorUrl } from './util/single.js';
 
+/** Redirect hops a transcript download may follow after the first request. */
+const ZOOM_MAX_DOWNLOAD_HOPS = 2;
+
+/** A download that redirected somewhere unsafe, or too many times. Counted, never thrown out. */
+class UnsafeRedirectError extends Error {
+  constructor() {
+    super('transcript download redirected off zoom.us or too many times');
+    this.name = 'UnsafeRedirectError';
+  }
+}
+
+/**
+ * Download a transcript, following Zoom's redirect by hand.
+ *
+ * UNVERIFIED LIVE: that Zoom answers a recording download with a 302 to a signed file
+ * host (ssrweb.zoom.us and similar) comes from Zoom developer-forum reports, not from a
+ * read against a real account (none was available). Check one real recording.
+ *
+ * Every hop is held to the vendor rules (https, zoom.us or *.zoom.us, no userinfo or
+ * port), at most {@link ZOOM_MAX_DOWNLOAD_HOPS} hops, redirect: manual throughout. The
+ * Bearer goes only to the first host and same-host hops: a hop to a different host is
+ * fetched WITHOUT it (a signed file URL carries its own authority).
+ */
+async function downloadTranscript(first: URL, token: string): Promise<Awaited<ReturnType<typeof fetch>>> {
+  let url = first;
+  let sendAuth = true;
+  for (let hop = 0; ; hop++) {
+    const res = await fetch(url.href, { headers: sendAuth ? { Authorization: `Bearer ${token}` } : {}, redirect: 'manual' });
+    if (res.status < 300 || res.status > 399) return res;
+    if (hop >= ZOOM_MAX_DOWNLOAD_HOPS) throw new UnsafeRedirectError();
+    const location = res.headers?.get?.('location');
+    let resolved: string | undefined;
+    try {
+      resolved = location ? new URL(location, url).href : undefined;
+    } catch {
+      resolved = undefined;
+    }
+    const next = resolved ? zoomDownloadUrl(resolved) : undefined;
+    if (!next) throw new UnsafeRedirectError();
+    if (next.hostname.toLowerCase() !== url.hostname.toLowerCase()) sendAuth = false;
+    url = next;
+  }
+}
+
 /** A transcript download URL: https on zoom.us or a *.zoom.us host, else undefined. */
 function zoomDownloadUrl(raw: string): URL | undefined {
   const host = parseUrl(raw)?.hostname.toLowerCase();
@@ -144,6 +188,7 @@ export class ZoomFetcher implements ConnectorFetcher {
     let transcriptPending = 0;
     let unreadable = 0;
     let offHostDownloads = 0;
+    let badRedirects = 0;
     // The item limit leaving a window, a page or a meeting unread.
     let cutByLimit = false;
 
@@ -197,13 +242,24 @@ export class ZoomFetcher implements ConnectorFetcher {
 
         // The download URL comes from the response, so it is held to the vendor rules
         // (https, a zoom.us host, no userinfo or port) before the token is sent, and the
-        // token travels in a header, never the query, with redirects not followed.
-        if (!zoomDownloadUrl(vttFile.download_url)) {
+        // token travels in a header, never the query. Redirects are followed by hand,
+        // bounded, and the token does not cross to another host (downloadTranscript).
+        const downloadUrl = zoomDownloadUrl(vttFile.download_url);
+        if (!downloadUrl) {
           offHostDownloads += 1;
           continue;
         }
         try {
-          const vttRes = await fetch(vttFile.download_url, { headers: { Authorization: `Bearer ${opts.token}` }, redirect: 'manual' });
+          let vttRes: Awaited<ReturnType<typeof fetch>>;
+          try {
+            vttRes = await downloadTranscript(downloadUrl, opts.token);
+          } catch (e) {
+            if (e instanceof UnsafeRedirectError) {
+              badRedirects += 1;
+              continue;
+            }
+            throw e;
+          }
           if (!vttRes.ok) {
             unreadable += 1;
             continue;
@@ -251,6 +307,9 @@ export class ZoomFetcher implements ConnectorFetcher {
     if (unreadable > 0) skips.push({ kind: 'error', count: unreadable, detail: 'transcripts that could not be downloaded' });
     if (offHostDownloads > 0) {
       skips.push({ kind: 'error', count: offHostDownloads, detail: 'transcripts whose download URL is not on zoom.us (not fetched)' });
+    }
+    if (badRedirects > 0) {
+      skips.push({ kind: 'error', count: badRedirects, detail: `transcripts whose download redirected off zoom.us, without a location, or more than ${ZOOM_MAX_DOWNLOAD_HOPS} times (not followed)` });
     }
     if (windowsOutOfTime > 0) {
       skips.push({ kind: 'time_budget', count: windowsOutOfTime, detail: `30-day windows not read (the ${opts.timeBudgetMs} ms time budget ran out)` });
