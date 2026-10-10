@@ -445,3 +445,62 @@ describe('GitHub fetchOne (capture from a URL)', () => {
     expect(s.urls).toEqual([]);
   });
 });
+
+describe('GitHub search query injection', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it.each(['a/b repo:c/d', 'a/b+is:private', 'a/b&page=1', 'a/b#x', 'a', 'a/b/c', '/b', 'a/', 'a/b%2Bis:private', 'a/b\nrepo:c/d'])(
+    'repo %j is refused as a shape skip: zero search calls, not complete',
+    async (repo) => {
+      const s = serve({});
+      for (const scope of ['yours', 'team'] as const) {
+        const { items, report } = await new GitHubFetcher().fetchWithReport({ token: 't', repo, scope });
+        expect(items).toEqual([]);
+        expect(report.complete).toBe(false);
+        expect(report.skips).toEqual([{ kind: 'shape', count: 1, detail: expect.stringContaining('owner/repo') }]);
+      }
+      expect(s.searches()).toHaveLength(0);
+    },
+  );
+
+  it('a valid repo still searches, and pages 2 and up differ from page 1', async () => {
+    const s = serve({ search: (q, page, perPage) => ({ body: q.includes('type:pr') ? pageOf(q, 250, page, perPage) : pageOf(q, 0, page, perPage) }) });
+    await new GitHubFetcher().fetchWithReport({ token: 't', limit: 250, repo: 'my-org/re.po_1', scope: 'team', discussion: 'none' });
+    const prPages = s.urls.filter((u) => u.includes('/search/issues') && decodeURIComponent(u).includes('type:pr')).map((u) => u.match(/[?&]page=(\d+)/)![1]);
+    expect(prPages).toEqual(['1', '2', '3']);
+    expect(s.searches().every((q) => q.startsWith('repo:my-org/re.po_1+'))).toBe(true);
+  });
+});
+
+describe('a discussion section GitHub fails to return', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  /** serve(), but every comments endpoint answers 500. */
+  function serveWithBrokenComments(opts: Parameters<typeof serve>[0]) {
+    const s = serve(opts);
+    const inner = mockFetch.getMockImplementation()!;
+    mockFetch.mockImplementation(async (input: unknown, init?: unknown) =>
+      String(input).includes('/comments') ? res({ message: 'boom' }, 500) : inner(input as never, init as never),
+    );
+    return s;
+  }
+
+  it('list fetch: the item is kept, marked detail_pending, with no partial discussion in raw_text', async () => {
+    serveWithBrokenComments({ search: (q, page, perPage) => ({ body: pageOf(q, q.includes('type:issue') ? 1 : 0, page, perPage, issueRow) }) });
+    const { items } = await new GitHubFetcher().fetchWithReport({ token: 't', limit: 5 });
+    expect(items).toHaveLength(1);
+    expect(items[0]!.detail_pending).toBe(true);
+    expect(items[0]!.raw_text).not.toContain('## Comments');
+  });
+
+  it('fetchOne: the item comes back pending AND an error skip says its discussion was not read', async () => {
+    serveWithBrokenComments({ single: () => ({ body: issueRow(7) }) });
+    const out = await new GitHubFetcher().fetchOne('https://github.com/o/r/issues/7', { token: 't' });
+    expect(out.item).toMatchObject({ source_url: 'https://github.com/o/r/issues/7', detail_pending: true });
+    expect(out.skip).toMatchObject({ kind: 'error', count: 1, detail: expect.stringContaining('discussion') });
+  });
+});

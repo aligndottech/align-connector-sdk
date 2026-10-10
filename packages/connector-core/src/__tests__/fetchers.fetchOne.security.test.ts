@@ -54,7 +54,7 @@ const common = (host: string, path: string) => [
   `https://${host}:8443${path}`, // a port
   `https://${host}.evil.com${path}`, // lookalike suffix
   `https://evil.com/${host}${path}`, // host text in the path
-  `https://${host}.${path}`.replace(`${host}.`, `${host}./`), // trailing-dot host
+  `https://${host}.${path}`, // trailing-dot host: the fully qualified spelling is still not the configured host
   `https://${host}\\@evil.com${path}`, // backslash trick
   ` https://${host}${path}`, // whitespace trick
   `https://${host}${path} `,

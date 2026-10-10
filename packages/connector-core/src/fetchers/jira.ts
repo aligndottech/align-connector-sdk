@@ -9,8 +9,8 @@ import type {
   FetchSkip,
 } from '../types/fetcher.js';
 import { providerError } from './errors.js';
-import { toIsoOrUndefined } from './util/time.js';
-import { buildFetchReport } from './util/report.js';
+import { parseWindow, toIsoOrUndefined } from './util/time.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { type Clock, deadlineFrom, pastDeadline, realClock } from './util/pace.js';
 import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, parseUrl, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorUrl } from './util/single.js';
@@ -66,7 +66,7 @@ function extractAdfText(adf: { content?: Array<{ content?: Array<{ text?: string
  * The JQL for a read. A JQL date is read in the user's profile timezone
  * (https://support.atlassian.com/jira-software-cloud/docs/jql-fields/), which this
  * fetcher cannot see, so the lower bound is the day BEFORE `since` and the upper bound
- * the day after `until`: a little more than asked, never less (the consumer upserts).
+ * two days after `until` (UTC+14 is the furthest profile): a little more than asked, never less (the consumer upserts).
  * With no window and no projects it is exactly the JQL used before S2.
  */
 export function buildJiraJql(opts: { projects?: string[]; since?: string; until?: string }): string {
@@ -75,11 +75,11 @@ export function buildJiraJql(opts: { projects?: string[]; since?: string; until?
     if (!PROJECT_KEY.test(key)) throw new Error(`Jira project key ${JSON.stringify(key)} is not a project key (letters, digits, underscore).`);
   }
   const mine = 'assignee = currentUser() OR reporter = currentUser()';
-  const sinceMs = opts.since ? Date.parse(opts.since) : NaN;
-  const untilMs = opts.until ? Date.parse(opts.until) : NaN;
+  const win = parseWindow(opts.since, opts.until);
+  if (!win.ok) throw new Error(`Jira window: ${win.detail}`);
   const bounds = [
-    ...(Number.isNaN(sinceMs) ? [] : [`updated >= "${jqlDay(sinceMs - DAY_MS)}"`]),
-    ...(Number.isNaN(untilMs) ? [] : [`updated < "${jqlDay(untilMs + DAY_MS)}"`]),
+    ...(win.sinceMs === undefined ? [] : [`updated >= "${jqlDay(win.sinceMs - DAY_MS)}"`]),
+    ...(win.untilMs === undefined ? [] : [`updated < "${jqlDay(win.untilMs + 2 * DAY_MS)}"`]),
   ];
   const scope = projects.length > 0 ? `project in (${projects.join(', ')})` : bounds.length > 0 ? `(${mine})` : mine;
   return `${[scope, ...bounds].join(' AND ')} ORDER BY updated DESC`;
@@ -151,6 +151,8 @@ export class JiraFetcher implements ConnectorFetcher {
     const { base, headers, browseBase } = connection(opts);
     const limit = opts.limit ?? 100;
     const team = (opts.projects ?? []).length > 0;
+    const win = parseWindow(opts.since, opts.until);
+    if (!win.ok) return refusedRead({ platform: 'jira', requested: limit, scope: team ? 'team' : 'yours', detail: win.detail });
     const jql = buildJiraJql({
       ...(opts.projects ? { projects: opts.projects } : {}),
       ...(opts.since ? { since: opts.since } : {}),

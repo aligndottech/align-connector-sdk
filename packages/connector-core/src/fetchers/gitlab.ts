@@ -8,9 +8,9 @@ import type {
   FetchResult,
   FetchSkip,
 } from '../types/fetcher.js';
-import { toIsoOrUndefined } from './util/time.js';
+import { parseWindow, toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
-import { buildFetchReport } from './util/report.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { type Clock, deadlineFrom, pastDeadline, realClock } from './util/pace.js';
 import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorUrl } from './util/single.js';
@@ -79,11 +79,11 @@ export class GitLabFetcher implements ConnectorFetcher {
     const headers = { Authorization: `Bearer ${opts.token}` };
     const team = opts.projectId !== undefined && opts.projectId !== '';
 
+    const win = parseWindow(opts.since, opts.until);
+    if (!win.ok) return refusedRead({ platform: 'gitlab', requested: opts.limit ?? 100, scope: team ? 'team' : 'yours', detail: win.detail });
     const window = new URLSearchParams();
-    const since = toIsoOrUndefined(opts.since);
-    const until = toIsoOrUndefined(opts.until);
-    if (since) window.set('updated_after', since);
-    if (until) window.set('updated_before', until);
+    if (win.since) window.set('updated_after', win.since);
+    if (win.until) window.set('updated_before', win.until);
 
     let listBase: string;
     if (team) {

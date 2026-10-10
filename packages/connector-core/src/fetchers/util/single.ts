@@ -29,7 +29,7 @@ export function thrownSkip(name: string, err: unknown, timeoutMs: number): Fetch
   return { skip: { kind: 'error', count: 1, detail: `item not read: the ${name} request failed (${errName ?? 'error'})` } };
 }
 
-/** Largest single-item response read, in characters. A PR or issue is a few kB; anything
+/** Largest single-item response read, in bytes. A PR or issue is a few kB; anything
  *  near this is not the item. */
 export const FETCH_ONE_MAX_BODY_BYTES = 2_000_000;
 
@@ -62,11 +62,56 @@ export function fetchOneInit(headers: Record<string, string>, signal: AbortSigna
   return { headers, signal, redirect: 'manual' as const };
 }
 
-/** The JSON body, or undefined when it is larger than {@link FETCH_ONE_MAX_BODY_BYTES}. */
-export async function readJsonCapped<T>(res: { text(): Promise<string> }): Promise<{ ok: true; value: T } | { ok: false }> {
+/**
+ * The JSON body, or `{ ok: false }` when it is larger than {@link FETCH_ONE_MAX_BODY_BYTES}.
+ * The limit is in BYTES: a declared `content-length` over it is refused without reading,
+ * and a stream is read chunk by chunk and cancelled at the cap, so an oversized answer is
+ * never held in memory. (UTF-16 length undercounts: two-byte text of 1.2M characters is
+ * 2.4M bytes.) A response with no stream falls back to `text()`.
+ */
+export async function readJsonCapped<T>(res: {
+  text(): Promise<string>;
+  headers?: { get(name: string): string | null };
+  body?: ReadableStream<Uint8Array> | null;
+}): Promise<{ ok: true; value: T } | { ok: false }> {
+  const declared = Number(res.headers?.get?.('content-length') ?? NaN);
+  if (!Number.isNaN(declared) && declared > FETCH_ONE_MAX_BODY_BYTES) return { ok: false };
+  if (res.body && typeof res.body.getReader === 'function') {
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > FETCH_ONE_MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return { ok: false };
+      }
+      chunks.push(value);
+    }
+    return { ok: true, value: JSON.parse(Buffer.concat(chunks).toString('utf8')) as T };
+  }
   const text = await res.text();
-  if (text.length > FETCH_ONE_MAX_BODY_BYTES) return { ok: false };
+  if (Buffer.byteLength(text, 'utf8') > FETCH_ONE_MAX_BODY_BYTES) return { ok: false };
   return { ok: true, value: JSON.parse(text) as T };
+}
+
+/**
+ * A vendor's error message, safe to put in a skip or an Error: token-like runs (a vendor
+ * prefix such as `lin_api_`, a `Bearer` value, or any 20+ character key-shaped run) are
+ * replaced, and the rest is cut to 120 characters. A vendor can echo back part of the
+ * request, and the request carries the stored credential.
+ */
+export function vendorMessage(message: unknown): string {
+  const text = typeof message === 'string' ? message : '';
+  const clean = text
+    .replace(/\b(?:lin_api_|lin_oauth_|ghp_|gho_|github_pat_|glpat-|xox[a-z]-)[A-Za-z0-9_-]*/gi, '[redacted]')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/[A-Za-z0-9_-]{20,}/g, '[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.length > 120 ? `${clean.slice(0, 120)}...` : clean;
 }
 
 export function tooLargeSkip(name: string): FetchOneResult {

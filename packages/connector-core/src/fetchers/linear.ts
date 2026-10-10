@@ -8,12 +8,12 @@ import type {
   FetchResult,
   FetchSkip,
 } from '../types/fetcher.js';
-import { toIsoOrUndefined } from './util/time.js';
+import { parseWindow, toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
-import { buildFetchReport } from './util/report.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { type Clock, SlidingWindowLimiter, deadlineFrom, pastDeadline, realClock } from './util/pace.js';
-import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorUrl } from './util/single.js';
+import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorMessage, vendorUrl } from './util/single.js';
 
 const LINEAR_GQL = 'https://api.linear.app/graphql';
 const LINEAR_PAGE_MAX = 100;
@@ -96,6 +96,8 @@ interface ReadContext {
   timedOut: boolean;
   /** Requests Linear said were left when the read stopped for the floor. */
   rateStoppedAt?: number;
+  /** Answers that carried no issue connection at all. */
+  missingConnections: number;
 }
 
 function pageQuery(source: LinearSource, filtered: boolean): string {
@@ -142,7 +144,7 @@ async function fetchConnection(source: LinearSource, ctx: ReadContext, target: n
       data?: Record<string, unknown> & { viewer?: Record<string, unknown> };
     };
     if (json.errors?.length) {
-      if (first) throw new Error(json.errors[0]!.message);
+      if (first) throw new Error(vendorMessage(json.errors[0]!.message));
       ctx.failedPages.push(200);
       return { nodes: out, exhausted: false };
     }
@@ -151,7 +153,10 @@ async function fetchConnection(source: LinearSource, ctx: ReadContext, target: n
     const conn = holder?.[source.kind === 'issues' ? 'issues' : source.field] as
       | { nodes: LinearIssueNode[]; pageInfo: { hasNextPage: boolean; endCursor: string } }
       | undefined;
-    if (!conn) break;
+    if (!conn) {
+      ctx.missingConnections += 1;
+      return { nodes: out, exhausted: false };
+    }
     out.push(...conn.nodes);
     if (!conn.pageInfo?.hasNextPage) return { nodes: out, exhausted: true };
     after = conn.pageInfo.endCursor;
@@ -209,8 +214,9 @@ export class LinearFetcher implements ConnectorFetcher {
     const limit = opts.limit ?? 50;
     const teams = opts.teams ?? [];
     const team = teams.length > 0;
-    const since = toIsoOrUndefined(opts.since);
-    const until = toIsoOrUndefined(opts.until);
+    const win = parseWindow(opts.since, opts.until);
+    if (!win.ok) return refusedRead({ platform: 'linear', requested: limit, scope: team ? 'team' : 'yours', detail: win.detail });
+    const { since, until } = win;
     const updatedAt = since || until ? { ...(since ? { gte: since } : {}), ...(until ? { lt: until } : {}) } : undefined;
     const filter =
       team || updatedAt ? { ...(team ? { team: { id: { in: teams } } } : {}), ...(updatedAt ? { updatedAt } : {}) } : undefined;
@@ -222,6 +228,7 @@ export class LinearFetcher implements ConnectorFetcher {
       ...(deadline !== undefined ? { deadline } : {}),
       ...(filter ? { filter } : {}),
       failedPages: [],
+      missingConnections: 0,
       timedOut: false,
     };
 
@@ -255,6 +262,9 @@ export class LinearFetcher implements ConnectorFetcher {
         count: ctx.failedPages.length,
         detail: `issue pages Linear failed to return (HTTP ${[...new Set(ctx.failedPages)].join(', ')})`,
       });
+    }
+    if (ctx.missingConnections > 0) {
+      skips.push({ kind: 'shape', count: ctx.missingConnections, detail: 'issue connections Linear answered without the connection asked for; nothing was read from them' });
     }
     if (ctx.rateStoppedAt !== undefined) {
       skips.push({
@@ -291,7 +301,7 @@ export class LinearFetcher implements ConnectorFetcher {
       if (!body.ok) return tooLargeSkip('Linear');
       const issue = body.value.data?.issue;
       if (!issue) {
-        return { skip: { kind: 'error', count: 1, detail: `item Linear could not return (${body.value.errors?.[0]?.message ?? 'no such issue'})` } };
+        return { skip: { kind: 'error', count: 1, detail: `item Linear could not return (${body.value.errors?.[0]?.message ? vendorMessage(body.value.errors[0].message) : 'no such issue'})` } };
       }
       return { item: toItem(issue) };
     } catch (err) {

@@ -60,7 +60,15 @@ describe('Jira team scope and since', () => {
   it('two projects and an until', async () => {
     const calls = serve(() => ({ body: { issues: [], isLast: true } }));
     await new JiraFetcher().fetch({ ...OAUTH, projects: ['ALI', 'ENG'], since: '2026-04-10T00:00:00Z', until: '2026-05-01T00:00:00Z' });
-    expect(calls[0]!.body.jql).toBe('project in (ALI, ENG) AND updated >= "2026-04-09" AND updated < "2026-05-02" ORDER BY updated DESC');
+    expect(calls[0]!.body.jql).toBe('project in (ALI, ENG) AND updated >= "2026-04-09" AND updated < "2026-05-03" ORDER BY updated DESC');
+  });
+
+  it('until mid-day: the upper day is two days on, so a UTC+2 profile loses nothing before until', async () => {
+    const calls = serve(() => ({ body: { issues: [], isLast: true } }));
+    await new JiraFetcher().fetch({ ...OAUTH, projects: ['ALI'], until: '2026-10-05T23:30:00Z' });
+    // "< 2026-10-06" read at UTC+2 stops at 2026-10-05T22:00Z, 90 minutes before until.
+    // Two days on reaches local midnight of Oct 7 even at UTC+14 (2026-10-06T10:00Z).
+    expect(calls[0]!.body.jql).toBe('project in (ALI) AND updated < "2026-10-07" ORDER BY updated DESC');
   });
 
   it('no projects: the caller\'s own JQL, bounded by since, scope yours', async () => {
