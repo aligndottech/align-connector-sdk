@@ -178,7 +178,14 @@ export interface FetchResult {
 }
 
 /** Inputs to {@link FetchOne}. Per-provider extras (`cloudId`, `siteBase`, `domain`,
- *  `email`) ride on the index signature exactly as they do for a list fetch. */
+ *  `email`) ride on the index signature exactly as they do for a list fetch.
+ *
+ *  SECURITY: `token` is a stored credential, and `cloudId`, `siteBase`, `domain` and any
+ *  other host-like option decide where it is sent. They MUST come from the connector's
+ *  stored configuration for this credential, never from the caller, an agent's tool
+ *  arguments, or the URL being captured. The consumer is an MCP tool: if an agent can
+ *  choose `domain`, it can send the token to a host it picks. fetchOne checks the URL
+ *  against these options; it cannot check the options themselves. */
 export interface FetchOneOptions {
   token: string;
   /** Wall-clock limit for the whole single-item read, ms. Default 3,000. Running out is a
