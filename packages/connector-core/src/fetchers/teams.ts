@@ -49,13 +49,23 @@ interface TeamsMessage {
   'replies@odata.nextLink'?: string;
 }
 
-async function graphGet<T>(path: string, token: string, signal?: AbortSignal): Promise<T> {
-  // A nextLink is absolute; a path is relative to v1.0.
-  const url = path.startsWith('https://') ? path : `https://graph.microsoft.com/v1.0${path}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    ...(signal ? { signal } : {}),
-  });
+/** A next link that is not on graph.microsoft.com: never followed, the Bearer goes nowhere else. */
+class OffHostLinkError extends Error {
+  constructor() {
+    super('Teams returned a next link not on graph.microsoft.com; it was not followed');
+    this.name = 'OffHostLinkError';
+  }
+}
+
+async function graphGet<T>(path: string, token: string): Promise<T> {
+  // A nextLink is absolute and comes from the response, so it is held to the vendor rules
+  // (https, graph.microsoft.com exactly, no userinfo or port) before the Bearer is sent.
+  // Anything with a scheme is absolute; only a bare path is relative to v1.0.
+  const absolute = /^[a-z][a-z0-9+.-]*:/i.test(path);
+  if (absolute && !vendorUrl(path, ['graph.microsoft.com'])) throw new OffHostLinkError();
+  const url = absolute ? path : `https://graph.microsoft.com/v1.0${path}`;
+  // No redirects: a 3xx arrives as a non-OK answer instead of carrying the Bearer elsewhere.
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, redirect: 'manual' });
   if (res.status === 401) throw await providerError('Teams', res);
   if (!res.ok) {
     // Read the body once: the consent branch needs Graph's error code, and providerError
@@ -218,6 +228,7 @@ export class TeamsFetcher implements ConnectorFetcher {
     let scanned = 0;
     let cutByLimit = false;
     let channelsUnreadable = 0;
+    let linksRefused = 0;
     let channelsRefused = 0;
     let channelsPageCut = 0;
     let threadsRepliesCut = 0;
@@ -284,7 +295,8 @@ export class TeamsFetcher implements ConnectorFetcher {
       } catch (e) {
         // A channel that refused is reported, never swallowed: the token was refused
         // (auth, likely the ~1 hour token expiring mid-read) or the channel is closed to it.
-        if (e instanceof FetcherAuthError) channelsRefused += 1;
+        if (e instanceof OffHostLinkError) linksRefused += 1;
+        else if (e instanceof FetcherAuthError) channelsRefused += 1;
         else channelsUnreadable += 1;
       }
       orderSkips.push(...order.skips(`messages in ${team.displayName} > #${channel.displayName}`));
@@ -300,6 +312,9 @@ export class TeamsFetcher implements ConnectorFetcher {
     if (channelsOutOfTime > 0) {
       skips.push({ kind: 'time_budget', count: channelsOutOfTime, detail: `channels not read (the ${opts.timeBudgetMs} ms time budget ran out)` });
     }
+    if (linksRefused > 0) {
+      skips.push({ kind: 'shape', count: linksRefused, detail: 'channels whose next links not on graph.microsoft.com were refused (not followed; later messages unread)' });
+    }
     if (channelsUnreadable > 0) {
       skips.push({ kind: 'error', count: channelsUnreadable, detail: 'channels the token could not read' });
     }
@@ -309,7 +324,7 @@ export class TeamsFetcher implements ConnectorFetcher {
 
     return {
       items,
-      report: buildFetchReport(items, { platform: 'teams', scanned, requested: limit, skips, scope: 'team', exhausted: !cutByLimit }),
+      report: buildFetchReport(items, { platform: 'teams', scanned, requested: limit, skips, scope: 'team', exhausted: !cutByLimit && linksRefused === 0 }),
     };
   }
 }
