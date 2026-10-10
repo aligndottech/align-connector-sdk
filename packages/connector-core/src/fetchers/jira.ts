@@ -66,7 +66,7 @@ function extractAdfText(adf: { content?: Array<{ content?: Array<{ text?: string
  * The JQL for a read. A JQL date is read in the user's profile timezone
  * (https://support.atlassian.com/jira-software-cloud/docs/jql-fields/), which this
  * fetcher cannot see, so the lower bound is the day BEFORE `since` and the upper bound
- * the day after `until`: a little more than asked, never less (the consumer upserts).
+ * two days after `until` (UTC+14 is the furthest profile): a little more than asked, never less (the consumer upserts).
  * With no window and no projects it is exactly the JQL used before S2.
  */
 export function buildJiraJql(opts: { projects?: string[]; since?: string; until?: string }): string {
@@ -79,7 +79,7 @@ export function buildJiraJql(opts: { projects?: string[]; since?: string; until?
   if (!win.ok) throw new Error(`Jira window: ${win.detail}`);
   const bounds = [
     ...(win.sinceMs === undefined ? [] : [`updated >= "${jqlDay(win.sinceMs - DAY_MS)}"`]),
-    ...(win.untilMs === undefined ? [] : [`updated < "${jqlDay(win.untilMs + DAY_MS)}"`]),
+    ...(win.untilMs === undefined ? [] : [`updated < "${jqlDay(win.untilMs + 2 * DAY_MS)}"`]),
   ];
   const scope = projects.length > 0 ? `project in (${projects.join(', ')})` : bounds.length > 0 ? `(${mine})` : mine;
   return `${[scope, ...bounds].join(' AND ')} ORDER BY updated DESC`;
