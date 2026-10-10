@@ -8,7 +8,7 @@ import type {
   FetchResult,
   FetchSkip,
 } from '../types/fetcher.js';
-import { toIsoOrUndefined } from './util/time.js';
+import { parseWindow, toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
 import { buildFetchReport, refusedRead } from './util/report.js';
 import { normaliseSourceKey } from '../sourceKey.js';
@@ -345,6 +345,11 @@ export class GitHubFetcher implements ConnectorFetcher {
     const deadline = deadlineFrom(opts.timeBudgetMs, clock);
     const headers = headersFor(opts.token);
 
+    const win = parseWindow(opts.since, opts.until);
+    if (!win.ok) {
+      return refusedRead({ platform: 'github', requested: opts.limit ?? 100, scope: opts.scope === 'team' && opts.repo ? 'team' : 'yours', detail: win.detail });
+    }
+
     // `repo` goes into the search query as a qualifier, so anything but a plain
     // owner/repo (a space, a `+`, a second qualifier) would widen the search past it.
     if (opts.repo !== undefined && !REPO_NAME.test(opts.repo)) {
@@ -364,7 +369,7 @@ export class GitHubFetcher implements ConnectorFetcher {
 
     const limit = opts.limit ?? 100;
     const team = opts.scope === 'team' && Boolean(opts.repo);
-    const slices: DaySlice[] | undefined = opts.since ? monthSlices(opts.since, opts.until, clock.now()) : undefined;
+    const slices: DaySlice[] | undefined = win.since ? monthSlices(win.since, win.until, clock.now()) : undefined;
     const dated = (slice: DaySlice | undefined) => (slice ? `+${updatedQualifier(slice)}` : '');
     const ctx = newSearchContext({
       headers,

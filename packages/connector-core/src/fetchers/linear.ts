@@ -8,9 +8,9 @@ import type {
   FetchResult,
   FetchSkip,
 } from '../types/fetcher.js';
-import { toIsoOrUndefined } from './util/time.js';
+import { parseWindow, toIsoOrUndefined } from './util/time.js';
 import { providerError } from './errors.js';
-import { buildFetchReport } from './util/report.js';
+import { buildFetchReport, refusedRead } from './util/report.js';
 import { normaliseSourceKey } from '../sourceKey.js';
 import { type Clock, SlidingWindowLimiter, deadlineFrom, pastDeadline, realClock } from './util/pace.js';
 import { FETCH_ONE_TIMEOUT_MS, fetchOneInit, readJsonCapped, shapeSkip, statusSkip, thrownSkip, tooLargeSkip, vendorUrl } from './util/single.js';
@@ -209,8 +209,9 @@ export class LinearFetcher implements ConnectorFetcher {
     const limit = opts.limit ?? 50;
     const teams = opts.teams ?? [];
     const team = teams.length > 0;
-    const since = toIsoOrUndefined(opts.since);
-    const until = toIsoOrUndefined(opts.until);
+    const win = parseWindow(opts.since, opts.until);
+    if (!win.ok) return refusedRead({ platform: 'linear', requested: limit, scope: team ? 'team' : 'yours', detail: win.detail });
+    const { since, until } = win;
     const updatedAt = since || until ? { ...(since ? { gte: since } : {}), ...(until ? { lt: until } : {}) } : undefined;
     const filter =
       team || updatedAt ? { ...(team ? { team: { id: { in: teams } } } : {}), ...(updatedAt ? { updatedAt } : {}) } : undefined;

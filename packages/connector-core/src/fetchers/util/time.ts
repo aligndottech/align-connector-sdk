@@ -19,3 +19,27 @@ export function toIsoOrUndefined(value: string | number | undefined | null): str
   if (Number.isNaN(ms) || ms <= 0) return undefined;
   return new Date(ms).toISOString();
 }
+
+export type ParsedWindow =
+  | { ok: true; sinceMs?: number; untilMs?: number; since?: string; until?: string }
+  | { ok: false; detail: string };
+
+/**
+ * The one reader of a fetch window's `since`/`until`, shared by every windowed fetcher.
+ * An absent or empty bound is no bound. A bound that is present and not a date is a
+ * refusal, never a silent drop: a dropped bound reads a different window than the one
+ * asked for (everything, or nothing) and the report would still say it was complete.
+ */
+export function parseWindow(since: string | undefined, until: string | undefined): ParsedWindow {
+  const out: { sinceMs?: number; untilMs?: number; since?: string; until?: string } = {};
+  for (const [name, raw] of [['since', since], ['until', until]] as const) {
+    if (raw === undefined || raw === '') continue;
+    const ms = typeof raw === 'string' ? Date.parse(raw) : Number.NaN;
+    if (Number.isNaN(ms)) {
+      return { ok: false, detail: `${name} is not a date (expected ISO-8601, such as 2026-03-01T00:00:00Z); nothing was read` };
+    }
+    out[`${name}Ms`] = ms;
+    out[name] = new Date(ms).toISOString();
+  }
+  return { ok: true, ...out };
+}
