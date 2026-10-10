@@ -1,3 +1,5 @@
+// Frozen copy of normaliseSourceKey as published in connector-core 0.10.0, kept only so
+// sourceKey.differential.test.ts can show what the zoom meeting_id change moved. Never edit.
 /**
  * One item's identity across every surface that sees it: the CLI's local graph, the
  * gateway's hosted scan, and a share from one to the other. Two readers of one format
@@ -10,8 +12,7 @@
  * No key (undefined) for a URL that cannot name one item, or cannot name it the same
  * way the site URL does: a synthetic identity Align minted ({@link isSyntheticSource}),
  * a bare host with or without a query (the Teams fetcher's `https://teams.microsoft.com`
- * fallback), the Zoom chat webhook's constant `https://zoom.us/chat`, an Atlassian OAuth
- * fallback URL (`api.atlassian.com/ex/<product>/<cloudId>`,
+ * fallback), an Atlassian OAuth fallback URL (`api.atlassian.com/ex/<product>/<cloudId>`,
  * which carries a cloudId where the site URL carries the site host, and the URL alone
  * cannot map one to the other), or an input that does not parse. A shared or mismatched
  * key there would merge unrelated items or split one item in two.
@@ -27,7 +28,6 @@
  *   5. Drop a title-derived path segment that changes when the item is renamed
  *      (Linear issue slug, Notion title prefix). Without this an edited title is a new
  *      URL, which is the twin this key exists to prevent.
- *      A Zoom recording keeps `meeting_id`, so a Discover scan URL keeps its meeting.
  *   6. Per-platform identity: a Confluence page is keyed by `<prefix>/pages/<id>`, so its
  *      space and slug never split it (a page moved between spaces keeps its key, and the
  *      viewpage.action?pageId= form agrees). A Slack /archives/ path takes the host
@@ -39,19 +39,14 @@
  * `?focusedCommentId=` with the query (rule 4). Comments belong to their item, and the
  * item is the unit a decision row is keyed on.
  */
-import { isSyntheticSource } from './utils/syntheticSource.js';
+import { isSyntheticSource } from '../../utils/syntheticSource.js';
 
 /** Query parameters that identify the item on that platform. Everything else is dropped. */
 const QUERY_ALLOWLIST: Readonly<Record<string, readonly string[]>> = {
-  // A Confluence URL in neither page form keeps pageId, the only id it could carry. Only
-  // confluence: a viewpage.action?pageId= URL on any other platform is not an identity
-  // anyone writes, so it gets the generic rule and loses its query.
+  // A Confluence URL in neither page form keeps pageId, the only id it could carry.
   confluence: ['pageId'],
   // A reply permalink names its thread in the query.
   slack: ['thread_ts'],
-  // The gateway's Discover scan writes https://zoom.us/recording/detail?meeting_id=<uuid>:
-  // the path is constant and the meeting is only in the query. Case-sensitive, like the uuid.
-  zoom: ['meeting_id'],
 };
 
 // A Notion page id: 32 lowercase hex characters ending the last path segment.
@@ -127,9 +122,6 @@ export function normaliseSourceKey(platform: string, url: string): string | unde
   // The OAuth fallback carries a cloudId instead of the site host: it can never match the
   // site URL of the same item, so it gets no key rather than a second one.
   if (host === 'api.atlassian.com' && bare.startsWith('/ex/')) return undefined;
-
-  // The Zoom chat webhook writes one constant URL for every message: it names no item.
-  if (platform === 'zoom' && bare === '/chat') return undefined;
 
   if (platform === 'confluence') {
     const page = confluencePagePath(u);

@@ -4,7 +4,7 @@
     "host_case": "Lowercase the scheme and the host. The path keeps its case.",
     "trailing_slash": "Drop trailing slashes from the path.",
     "fragment": "Drop the fragment.",
-    "query": "Drop the query, except the parameters on the platform allowlist (confluence: pageId; slack: thread_ts), kept in name order.",
+    "query": "Drop the query, except the parameters on the platform allowlist (confluence: pageId; slack: thread_ts; zoom: meeting_id), kept in name order.",
     "slug": "Drop a title-derived path segment that changes when the item is renamed (linear, confluence, notion).",
     "page_id": "Confluence: key by host, path prefix and page id only, so space and slug never split a page.",
     "workspace_host": "Slack: the host of an /archives/ path is slack.com, whichever workspace host the permalink used.",
@@ -12,7 +12,7 @@
     "percent_case": "Percent-escape hex digits are uppercased (%2f -> %2F).",
     "notion_peek": "Notion: a ?p=<pageid> peek URL is keyed by that page id.",
     "comment_anchor": "A URL pointing at a comment (GitHub #issuecomment-N, Jira focusedCommentId, Linear #comment-x) maps to its item: comments belong to their item, by design.",
-    "no_key": "A synthetic identity (align://claimed/, align://unsourced/), a bare host (with or without a query), an Atlassian OAuth fallback URL (api.atlassian.com/ex/...), or an unparseable input gets no key: normaliseSourceKey returns undefined."
+    "no_key": "A synthetic identity (align://claimed/, align://unsourced/), a bare host (with or without a query), the Zoom chat webhook's constant https://zoom.us/chat, an Atlassian OAuth fallback URL (api.atlassian.com/ex/...), or an unparseable input gets no key: normaliseSourceKey returns undefined."
   },
   "cases": [
     {
@@ -1087,6 +1087,74 @@
       "same": false,
       "key": "https://linear.app/acme/issue/ENG-1",
       "why": "two issues stay two keys"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "https://zoom.us/recording/detail?meeting_id=U1%2Fab%2Bcd%3D%3D",
+      "b": "https://zoom.us/recording/detail?meeting_id=U2%2Fab%2Bcd%3D%3D",
+      "same": false,
+      "key": "https://zoom.us/recording/detail?meeting_id=U1%2Fab%2Bcd%3D%3D",
+      "why": "the Discover scan URL carries the meeting in meeting_id, so two meetings are two keys"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "HTTPS://ZOOM.US/recording/detail/?meeting_id=U1%2Fab%2Bcd%3D%3D",
+      "b": "https://zoom.us/recording/detail?meeting_id=U1%2Fab%2Bcd%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/detail?meeting_id=U1%2Fab%2Bcd%3D%3D",
+      "why": "host case and a trailing slash do not split one meeting"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "https://zoom.us/recording/detail?w=1&meeting_id=U1%2Fab%2Bcd%3D%3D#c1",
+      "b": "https://zoom.us/recording/detail?meeting_id=U1%2Fab%2Bcd%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/detail?meeting_id=U1%2Fab%2Bcd%3D%3D",
+      "why": "a foreign parameter and the fragment are dropped, meeting_id is kept"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "https://zoom.us/recording/detail?meeting_id=abc",
+      "b": "https://zoom.us/recording/detail?meeting_id=ABC",
+      "same": false,
+      "key": "https://zoom.us/recording/detail?meeting_id=abc",
+      "why": "meeting_id is case-sensitive: a Zoom uuid is, so two cases are two meetings"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "https://zoom.us/recording/detail?meeting_id=abc",
+      "b": "https://zoom.us/recording/detail",
+      "same": false,
+      "key": "https://zoom.us/recording/detail?meeting_id=abc",
+      "why": "a recording URL without meeting_id is not the same item as one with it"
+    },
+    {
+      "platform": "zoom",
+      "rule": "query",
+      "a": "https://zoom.us/recording/detail?meeting_id=a/b==",
+      "b": "https://zoom.us/recording/detail?meeting_id=a%2Fb%3D%3D",
+      "same": true,
+      "key": "https://zoom.us/recording/detail?meeting_id=a%2Fb%3D%3D",
+      "why": "a raw and an encoded uuid are one meeting, and the key is the encoded form"
+    },
+    {
+      "platform": "zoom",
+      "rule": "no_key",
+      "a": "https://zoom.us/chat",
+      "key": null,
+      "why": "the Zoom chat webhook writes this one constant URL for every message, so it names no item and gets no key"
+    },
+    {
+      "platform": "zoom",
+      "rule": "no_key",
+      "a": "https://zoom.us/chat?w=1",
+      "key": null,
+      "why": "a query on the constant chat URL does not make it name an item"
     }
   ]
 }
