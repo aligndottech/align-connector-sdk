@@ -6,20 +6,30 @@
 [![npm: connector-server](https://img.shields.io/npm/v/@aligndottech/connector-server.svg?label=%40aligndottech%2Fconnector-server)](https://www.npmjs.com/package/@aligndottech/connector-server)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](https://nodejs.org)
 
-Open-source (MIT) SDK for building [Align](https://align.tech) connectors. Two packages:
+The open-source (MIT) SDK for building [Align](https://align.tech) connectors.
 
-| Package | What it is | Depends on |
-|---|---|---|
-| [`@aligndottech/connector-core`](packages/connector-core) | The **read** foundation: the `ConnectorFetcher` contract, normalized item types, read-only fetchers, the gateway client, and tier definitions. **Lightweight** (only `undici`) - the Align CLI depends on this. | - |
-| [`@aligndottech/connector-server`](packages/connector-server) | **Server plumbing** for full connectors: Express app factory, MCP handler, webhook signature guard, OpenTelemetry setup, test harness. | `connector-core` |
+A connector is the part that knows one tool, say Jira or Miro: how to read from it, and
+optionally how to post back into it. Align's decision engine does everything else, and it works
+the same way for every connector. So a new connector is only the tool-specific code.
 
-## Adding a connector
+| Package | What it's for |
+|---|---|
+| [`@aligndottech/connector-core`](packages/connector-core) | Reading. The `ConnectorFetcher` contract, item types, read-only fetchers and the gateway client. Its only dependency is `undici`, and the Align CLI depends on it. |
+| [`@aligndottech/connector-server`](packages/connector-server) | Running a full connector: an Express app factory, an MCP handler, webhook signature checks, OpenTelemetry setup and a test harness. Depends on `connector-core`. |
 
-A connector is a **tool adapter**: the bits that are specific to *your* tool (Slack, Jira, Miro, ...). You write all of it against the interfaces in this SDK. There is **no per-tool orchestration to write** - Align's decision engine is generic and the *same* for every connector, so your one adapter powers both the free CLI and the commercial real-time product.
+```bash
+npm install @aligndottech/connector-core
+npm install @aligndottech/connector-server   # only for a real-time connector
+```
 
-An adapter has two layers - implement what your tool supports:
+Node 20 or later.
 
-**1. Read (required)** - a `ConnectorFetcher` that pulls items from your tool's read API:
+## Write a fetcher (required)
+
+A fetcher reads items from your tool's API. The free
+[Align CLI](https://github.com/aligndottech/align-cli) calls `fetch()` for personal imports.
+Align's hosted scan of a team's history calls the optional `fetchPage()`, through your
+connector's `fetch_historical` MCP tool.
 
 ```ts
 import type { ConnectorFetcher, ConnectorFetcherOptions, FetcherItem, FetchResult } from '@aligndottech/connector-core';
@@ -29,83 +39,88 @@ export class MiroFetcher implements ConnectorFetcher {
     return (await this.fetchWithReport(opts)).items;
   }
 
-  // Optional, and the shape every built-in fetcher uses: the read lives here, and
-  // `fetch()` delegates so the two cannot drift. The report says what the read
-  // could NOT reach - a page cap, a time budget, an object that was not the kind
-  // you read, an error the provider returned - as counts a person can read.
+  // Optional, but every built-in fetcher has it. Put the read here and have fetch() call it,
+  // so the two can't drift apart.
   async fetchWithReport({ token, limit = 50 }: ConnectorFetcherOptions): Promise<FetchResult> {
-    // call your tool's read API, map results to FetcherItem[]
-    const items: FetcherItem[] = [];
-    // `complete`: you read to the end of what was asked, so a sync may advance its watermark.
-    // `scope`: 'yours' (only the caller's items) or 'team' (everything the token can read).
-    // `buildFetchReport(items, { ..., exhausted })` from connector-core fills these for you.
-    return { items, report: { platform: 'miro', scanned: 0, requested: limit, skips: [], complete: true, scope: 'team' } };
+    const items: FetcherItem[] = []; // call your tool's API and map the results
+    return {
+      items,
+      report: { platform: 'miro', scanned: 0, requested: limit, skips: [], complete: true, scope: 'team' },
+    };
   }
 }
 ```
 
-A `FetcherItem` carries `source_url`, `platform`, `raw_text`, an optional `title` and `author`, and an optional
-`created_at` (ISO-8601 Z) taken from **the tool's own timestamp**. Leave `created_at` out when the tool did not say;
-never substitute the fetch time, because a plausible wrong date is indistinguishable from a measurement downstream.
+The report tells the user what the read could not reach: a page cap, a time limit, an item type
+you don't read, or an error the provider returned. Set `complete` when you read everything that
+was asked for, and `scope` to `'yours'` or `'team'`. `buildFetchReport()` from `connector-core`
+fills these in for you.
 
-**On a refused request, throw what the provider said.** Use `providerError(connector, res, { forbidden })`
-from connector-core: a 401 becomes a typed `FetcherAuthError` carrying the provider's message (the CLI offers a
-reconnect and forgets a saved token that is dead), any other status becomes `<Connector> API failed (<status>):
-<provider text>`, and a scope hint is added only on 403. Never write "check your token" for a status that does
-not mean the token was refused: a 400 is the provider rejecting the request, and pointing at the key sends the
-user the wrong way.
+Worth knowing:
 
-This single implementation serves both the **free CLI** (calls `fetch()` for personal imports, and `fetchWithReport()`
-when present, to print what each import fetched and skipped) and the **paid discover scan** (calls your `fetch_historical`
-tool, backed by the same fetcher).
+- **A `FetcherItem`** has `source_url`, `platform`, `raw_text`, and optionally `title`, `author`
+  and `created_at`.
+- **`created_at` must be the tool's own timestamp** (ISO-8601, UTC). If the tool doesn't give
+  one, leave it out. Never use the time you fetched it, because a plausible wrong date looks
+  exactly like a real one later on.
+- **When the provider refuses a request, throw what it said.** Use
+  `throw await providerError(connector, res, { forbidden })` (it's async). A 401 becomes a
+  `FetcherAuthError`, and the CLI then offers to reconnect. Anything else becomes
+  `<Connector> API failed (<status>): <provider text>`, with your `forbidden` hint added only on a 403.
+  Don't tell the user to check their token unless the token was what got refused. A 400 means the
+  request was wrong, not the key.
 
-**2. Real-time (optional)** - to capture decisions live (a Slack/Teams-style bot), implement the platform interfaces and stand up a webhook server with the SDK's scaffolding:
+## Add real-time capture (optional)
+
+To capture decisions as they happen, the way a Slack or Teams bot does, implement two interfaces
+and stand up a webhook server with `connector-server`:
 
 ```ts
 import type { DecisionAlertFormatter, MessagePoster } from '@aligndottech/connector-core';
 import { createConnectorApp, WebhookGuard, createMcpHandler } from '@aligndottech/connector-server';
 
 export class MiroAlertFormatter implements DecisionAlertFormatter { /* render a decision card in Miro */ }
-export class MiroMessagePoster   implements MessagePoster        { /* post/update in Miro */ }
+export class MiroMessagePoster implements MessagePoster { /* post or update a message in Miro */ }
 ```
 
-## What's yours vs. ours
+`WebhookGuard` skips signature checks when no secret is set. That's the default for backward
+compatibility. In production, pass `failClosed: true` so a missing secret rejects requests instead.
 
-| You write (open, this SDK) | Align provides (closed, written once) |
-|---|---|
-| `ConnectorFetcher` (read) | The **generic decision engine** that drives every connector identically: |
-| `DecisionAlertFormatter` (render) | relationship classification, conflict/supersession handling, |
-| `MessagePoster` (post) | the decision graph, and the queue/fan-out/dedup of the discover scan. |
-| webhook handler + MCP tools | |
+## What you write, and what Align runs
 
-The engine is **tool-agnostic** - it calls *your* formatter/poster through the interfaces above. So when you contribute, say, a Miro adapter, Align writes **zero** Miro-specific code; the existing engine + your adapter *is* the Miro bot. The interface contract is the only thing that has to stay in sync - there's no per-tool coordination.
+You write the tool-specific code, here in the open: the fetcher, the formatter, the poster, the
+webhook handler and any MCP tools.
 
-Develop and test entirely against the SDK's mocks (`MockGatewayClient`, `TestHarness`, `NoOpDecisionFlowStateRepository`) - you never need the engine source. You write the **adapter** (tool knowledge); Align provides the **brain** (decision intelligence). One contribution, both tiers.
+Align runs the decision engine: classifying how decisions relate, handling conflicts and
+replacements, the decision graph itself, and the queueing and deduplication behind a scan. It's
+closed source and it doesn't know about any one tool. It calls your formatter and poster through
+the interfaces above, so a Miro connector needs no Miro-specific code on Align's side.
 
-## Releasing
-
-release-please cuts releases from conventional commits on `main`. A PR squash-merges with the PR
-title (or the single commit's subject) as the subject and every commit message on the branch as
-the body, and release-please parses that whole message. A line it cannot parse drops the entire
-commit from the release and the changelog with nothing going red; #26 shipped that way and needed
-#27 to release it. CI's `squash-message` job composes the message GitHub will write and fails the
-PR while it can still be reworded. Plain prose in commit bodies parses; a line that opens with a
-backtick or a parenthesis does not.
+You don't need the engine to build or test a connector. Use `MockGatewayClient` and
+`NoOpDecisionFlowStateRepository` from `connector-core`, and `TestHarness` from
+`@aligndottech/connector-server/testing`.
 
 ## Develop
 
 ```bash
 pnpm install
-pnpm -r build      # tsc -> dist/ for each package
-pnpm -r test       # vitest
+pnpm -r build
+pnpm -r test
 pnpm -r typecheck
 pnpm -r lint
 ```
 
-## Release
+## Releasing
 
-Publishing is gated on a git tag. Push a `v*` tag and `.github/workflows/publish.yml` runs `pnpm -r publish --access public --provenance`. Both packages version in lockstep.
+release-please opens a release PR from the conventional commits on `main`. Merging it tags the
+release and publishes both packages to npm with provenance. The two packages share one version.
+
+One trap: a PR squash-merges with every commit message on the branch in the body, and
+release-please parses all of it. A line it can't parse drops the whole commit from the release
+without anything going red (#26 shipped that way and needed #27). CI's `squash-message` job
+catches this before merge. Plain prose is fine. A line that starts with a backtick or a
+parenthesis isn't.
 
 ## License
 
-MIT - see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
