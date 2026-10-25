@@ -4,7 +4,11 @@ import { fetch as undiciFetch } from 'undici';
 export interface CredentialResolverConfig {
   /** Platform name (e.g., 'jira', 'github') — used in error messages */
   platform: string;
-  /** Map of credential key to env var name. E.g., { token: 'JIRA_API_TOKEN' } */
+  /**
+   * Map of credential key to env var name. E.g., { token: 'JIRA_API_TOKEN' }.
+   * Honoured only when NODE_ENV is 'test': an ambient variable would hand one credential to
+   * every tenant a pod serves, skipping the gateway exchange that scopes it.
+   */
   envVars?: Record<string, string>;
   /** Header name for direct token pass-through. E.g., 'x-github-token' */
   directTokenHeader?: string;
@@ -42,7 +46,7 @@ export class BaseCredentialResolver {
     }
 
     // Tier 1b: Environment variables
-    if (this.config.envVars) {
+    if (this.config.envVars && process.env.NODE_ENV === 'test') {
       const result: CredentialResult = {};
       let allPresent = true;
       for (const [key, envVar] of Object.entries(this.config.envVars)) {

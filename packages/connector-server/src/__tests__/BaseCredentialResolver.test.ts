@@ -3,6 +3,9 @@ import { BaseCredentialResolver } from '../auth/BaseCredentialResolver.js';
 
 describe('BaseCredentialResolver', () => {
   beforeEach(() => {
+    // The env-var bypass is test-only, so every case states which side it is on. The cases
+    // below that prove the bypass is OFF override this.
+    vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('GATEWAY_BEARER_TOKEN', undefined);
     vi.stubEnv('SERVICE_AUTH_TOKEN', undefined);
   });
@@ -182,6 +185,32 @@ describe('BaseCredentialResolver', () => {
       const fetchFn = okFetch();
       await exchange(fetchFn).resolve({ bearer: 'user-bearer', tenantId: 'tenant-123' });
       expect(authorizationOf(fetchFn)).toBe('Bearer user-bearer');
+    });
+  });
+
+  describe('the envVars bypass is test-only', () => {
+    const withEnvVar = () =>
+      new BaseCredentialResolver({
+        platform: 'test',
+        envVars: { token: 'MY_TOKEN' },
+        gatewayEndpoint: '/integrations/test/credentials',
+      });
+
+    it.each(['production', 'development'])('is ignored when NODE_ENV is %s', async (nodeEnv) => {
+      vi.stubEnv('NODE_ENV', nodeEnv);
+      vi.stubEnv('MY_TOKEN', 'ambient-token');
+      await expect(withEnvVar().resolve({})).rejects.toThrow('unauthorized');
+    });
+
+    it('is ignored when NODE_ENV is unset', async () => {
+      vi.stubEnv('NODE_ENV', undefined);
+      vi.stubEnv('MY_TOKEN', 'ambient-token');
+      await expect(withEnvVar().resolve({})).rejects.toThrow('unauthorized');
+    });
+
+    it('is honoured when NODE_ENV is test', async () => {
+      vi.stubEnv('MY_TOKEN', 'ambient-token');
+      expect(await withEnvVar().resolve({})).toEqual({ token: 'ambient-token' });
     });
   });
 });
