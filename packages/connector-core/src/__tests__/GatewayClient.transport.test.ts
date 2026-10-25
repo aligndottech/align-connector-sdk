@@ -330,6 +330,26 @@ describe('GatewayClient transport', () => {
       });
     });
 
+    it.each(['Accept', 'ACCEPT', 'accept'])('drops a caller %s header: request() builds none', async (name) => {
+      const { fetchFn, calls } = recordingFetch();
+      const client = new Probe({ gatewayUrl: 'http://gw.test', bearerToken: 'real', fetch: fetchFn });
+
+      await client.call('/x', { headers: { [name]: 'text/html' } });
+
+      expect(calls[0].init.headers).toEqual({ authorization: 'Bearer real' });
+    });
+
+    it('accepts a Headers instance and an array of pairs, lower-casing names and keeping the last of a repeated key', async () => {
+      const { fetchFn, calls } = recordingFetch();
+      const client = new Probe({ gatewayUrl: 'http://gw.test', bearerToken: 'real', fetch: fetchFn });
+
+      await client.call('/x', { headers: new Headers({ 'X-Align-Platform': 'slack' }) as never });
+      await client.call('/x', { headers: [['X-Align-Platform', 'teams'], ['x-align-platform', 'zoom']] as never });
+
+      expect(calls[0].init.headers).toMatchObject({ 'x-align-platform': 'slack' });
+      expect(calls[1].init.headers).toMatchObject({ 'x-align-platform': 'zoom' });
+    });
+
     it('drops a caller authorization even when the call has no tenant or body of its own', async () => {
       const { fetchFn, calls } = recordingFetch();
       const client = new Probe({ gatewayUrl: 'http://gw.test', bearerToken: 'real', fetch: fetchFn });

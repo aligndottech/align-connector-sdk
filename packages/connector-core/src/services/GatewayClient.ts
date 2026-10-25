@@ -51,8 +51,35 @@ export interface GatewayClientConfig {
   timeoutMs?: number;
 }
 
-/** Headers request() builds itself. A caller's copy of any of these, in any case, is dropped. */
-const BUILT_HEADERS = new Set(['authorization', 'x-tenant-id', 'content-type']);
+/**
+ * Headers the client builds itself, on a request or a stream. A caller's copy of any of these,
+ * in any letter case, is dropped, so the built value is the only one on the wire.
+ */
+const BUILT_HEADERS = new Set(['authorization', 'x-tenant-id', 'content-type', 'accept']);
+
+/** Caller headers: a plain object, a Headers instance, or an array of [name, value] pairs. */
+export type GatewayCallerHeaders =
+  | Record<string, string | undefined | null>
+  | Iterable<readonly [string, string]>;
+
+/**
+ * Normalises caller headers to a plain object with lower-case names, the last of a repeated
+ * name winning. Undefined and null values are skipped, and any other non-string value throws a
+ * TypeError rather than being sent as text. Headers the client builds itself are dropped.
+ */
+function withoutBuiltHeaders(callerHeaders: GatewayCallerHeaders | undefined): Record<string, string> {
+  const kept: Record<string, string> = {};
+  if (callerHeaders == null) return kept;
+  const pairs: Iterable<readonly [string, unknown]> =
+    Symbol.iterator in callerHeaders ? callerHeaders : Object.entries(callerHeaders);
+  for (const [key, value] of pairs) {
+    const name = key.toLowerCase();
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'string') throw new TypeError(`Header ${key} must be a string`);
+    if (!BUILT_HEADERS.has(name)) kept[name] = value;
+  }
+  return kept;
+}
 
 /** AbortSignal.any, with a fallback for Node 20.0 to 20.2, where it does not exist. */
 function anySignal(signals: AbortSignal[]): AbortSignal {
@@ -171,15 +198,12 @@ export class GatewayClient {
        * x-tenant-id, content-type), in any letter case, is dropped, so a caller cannot
        * launder a request past them.
        */
-      headers?: Record<string, string>;
+      headers?: GatewayCallerHeaders;
       /** Aborts this request. Combined with the client's `timeoutMs` when both are set. */
       signal?: AbortSignal;
     } = {}
   ): Promise<T> {
-    const headers: Record<string, string> = {};
-    for (const [key, value] of Object.entries(options.headers ?? {})) {
-      if (!BUILT_HEADERS.has(key.toLowerCase())) headers[key] = value;
-    }
+    const headers = withoutBuiltHeaders(options.headers);
 
     if (options.body) {
       headers['content-type'] = 'application/json';
@@ -261,13 +285,33 @@ export class GatewayClient {
    * Yields events: { type: 'token', data: { text: string } }
    *             or { type: 'complete', data: ConversationalResponse }
    *             or { type: 'error', data: { error: string } }
+   *
+   * `options.headers` are extra headers for this call only (for example x-user-email). A caller
+   * key matching authorization, x-tenant-id, content-type or accept, in any letter case, is
+   * dropped. `options.signal` aborts the stream's fetch and its reader; the generator then
+   * rejects with the signal's reason. There is no default timeout on a stream, by design: one
+   * would cut a healthy stream.
    */
-  async *streamConversational(
+  streamConversational(
     tenantId: string,
     payload: ConversationalRequest,
+    options: { headers?: GatewayCallerHeaders; signal?: AbortSignal } = {},
+  ): AsyncGenerator<StreamEvent> {
+    // Read at call time, not at the first next(): a generator is lazy, so a caller who mutates
+    // its headers object between creating the stream and draining it must not change the request.
+    // The bearer is still checked at the first next(), as before.
+    return this.#stream(tenantId, payload, withoutBuiltHeaders(options.headers), options.signal);
+  }
+
+  async *#stream(
+    tenantId: string,
+    payload: ConversationalRequest,
+    callerHeaders: Record<string, string>,
+    signal: AbortSignal | undefined,
   ): AsyncGenerator<StreamEvent> {
     const url = `${this.gatewayUrl}/ingest/conversational/stream`;
     const headers: Record<string, string> = {
+      ...callerHeaders,
       'Content-Type': 'application/json',
       'x-tenant-id': tenantId,
       'Accept': 'text/event-stream',
@@ -278,6 +322,7 @@ export class GatewayClient {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+      signal,
     });
 
     if (!response.ok) {
