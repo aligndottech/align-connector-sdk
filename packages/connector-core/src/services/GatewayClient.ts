@@ -57,10 +57,26 @@ export interface GatewayClientConfig {
  */
 const BUILT_HEADERS = new Set(['authorization', 'x-tenant-id', 'content-type', 'accept']);
 
-function withoutBuiltHeaders(callerHeaders: Record<string, string> | undefined): Record<string, string> {
+/** Caller headers: a plain object, a Headers instance, or an array of [name, value] pairs. */
+export type GatewayCallerHeaders =
+  | Record<string, string | undefined | null>
+  | Iterable<readonly [string, string]>;
+
+/**
+ * Normalises caller headers to a plain object with lower-case names, the last of a repeated
+ * name winning. Undefined and null values are skipped, and any other non-string value throws a
+ * TypeError rather than being sent as text. Headers the client builds itself are dropped.
+ */
+function withoutBuiltHeaders(callerHeaders: GatewayCallerHeaders | undefined): Record<string, string> {
   const kept: Record<string, string> = {};
-  for (const [key, value] of Object.entries(callerHeaders ?? {})) {
-    if (!BUILT_HEADERS.has(key.toLowerCase())) kept[key] = value;
+  if (callerHeaders == null) return kept;
+  const pairs: Iterable<readonly [string, unknown]> =
+    Symbol.iterator in callerHeaders ? callerHeaders : Object.entries(callerHeaders);
+  for (const [key, value] of pairs) {
+    const name = key.toLowerCase();
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'string') throw new TypeError(`Header ${key} must be a string`);
+    if (!BUILT_HEADERS.has(name)) kept[name] = value;
   }
   return kept;
 }
@@ -182,7 +198,7 @@ export class GatewayClient {
        * x-tenant-id, content-type), in any letter case, is dropped, so a caller cannot
        * launder a request past them.
        */
-      headers?: Record<string, string>;
+      headers?: GatewayCallerHeaders;
       /** Aborts this request. Combined with the client's `timeoutMs` when both are set. */
       signal?: AbortSignal;
     } = {}
@@ -276,14 +292,26 @@ export class GatewayClient {
    * rejects with the signal's reason. There is no default timeout on a stream, by design: one
    * would cut a healthy stream.
    */
-  async *streamConversational(
+  streamConversational(
     tenantId: string,
     payload: ConversationalRequest,
-    options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
+    options: { headers?: GatewayCallerHeaders; signal?: AbortSignal } = {},
+  ): AsyncGenerator<StreamEvent> {
+    // Read at call time, not at the first next(): a generator is lazy, so a caller who mutates
+    // its headers object between creating the stream and draining it must not change the request.
+    // The bearer is still checked at the first next(), as before.
+    return this.#stream(tenantId, payload, withoutBuiltHeaders(options.headers), options.signal);
+  }
+
+  async *#stream(
+    tenantId: string,
+    payload: ConversationalRequest,
+    callerHeaders: Record<string, string>,
+    signal: AbortSignal | undefined,
   ): AsyncGenerator<StreamEvent> {
     const url = `${this.gatewayUrl}/ingest/conversational/stream`;
     const headers: Record<string, string> = {
-      ...withoutBuiltHeaders(options.headers),
+      ...callerHeaders,
       'Content-Type': 'application/json',
       'x-tenant-id': tenantId,
       'Accept': 'text/event-stream',
@@ -294,7 +322,7 @@ export class GatewayClient {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
-      signal: options.signal,
+      signal,
     });
 
     if (!response.ok) {

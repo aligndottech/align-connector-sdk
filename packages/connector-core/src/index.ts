@@ -97,6 +97,7 @@ export { CommandParser, CommandHelpText } from './parsers/CommandParser.js';
 export {
   GatewayClient,
   type GatewayClientConfig,
+  type GatewayCallerHeaders,
   type JiraCredentials,
 } from './services/GatewayClient.js';
 export {

@@ -13,11 +13,9 @@ const COMPLETE = 'event: complete\ndata: {"intent":"question","response_text":"o
  */
 async function startSse(hang = false) {
   const headersSeen: IncomingHttpHeaders[] = [];
-  const rawHeaders: string[][] = [];
   const closed: Promise<void>[] = [];
   const server: Server = createServer((req, res) => {
     headersSeen.push(req.headers);
-    rawHeaders.push(req.rawHeaders);
     closed.push(new Promise((resolve) => res.on('close', () => resolve())));
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.write('event: token\ndata: {"text":"hi"}\n\n');
@@ -27,7 +25,6 @@ async function startSse(hang = false) {
   return {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     headersSeen,
-    rawHeaders,
     closed,
     stop: () => {
       server.closeAllConnections();
@@ -40,11 +37,6 @@ async function drain(gen: AsyncGenerator<{ type: string }>): Promise<string[]> {
   const types: string[] = [];
   for await (const event of gen) types.push(event.type);
   return types;
-}
-
-/** How many times a header name appears on the wire, in any letter case. */
-function occurrences(raw: string[], name: string): number {
-  return raw.filter((v, i) => i % 2 === 0 && v.toLowerCase() === name).length;
 }
 
 describe('GatewayClient.streamConversational call options', () => {
@@ -108,10 +100,8 @@ describe('GatewayClient.streamConversational call options', () => {
       }),
     );
 
-    const raw = server.rawHeaders[0];
-    for (const name of ['authorization', 'x-tenant-id', 'content-type', 'accept']) {
-      expect(occurrences(raw, name), name).toBe(1);
-    }
+    // Exact values, not occurrence counts: undici joins same-name headers as "a, b", so a
+    // surviving forged value shows up as a longer string, never as a second header.
     expect(server.headersSeen[0]).toMatchObject({
       authorization: 'Bearer real',
       'x-tenant-id': 'real-tenant',
@@ -119,6 +109,87 @@ describe('GatewayClient.streamConversational call options', () => {
       accept: 'text/event-stream',
       'x-user-email': 'ada@example.com',
     });
+  });
+
+  describe('caller headers in every HeadersInit shape', () => {
+    const shapes: Array<[string, () => never]> = [
+      ['a plain object', () => ({ 'x-user-email': 'ada@example.com' }) as never],
+      ['a Headers instance', () => new Headers({ 'x-user-email': 'ada@example.com' }) as never],
+      ['an array of [name, value] pairs', () => [['x-user-email', 'ada@example.com']] as never],
+    ];
+
+    it.each(shapes)('%s delivers x-user-email exactly', async (_name, make) => {
+      const server = await startSse();
+      stop = server.stop;
+
+      await drain(client(server.url).streamConversational('t', {} as never, { headers: make() }));
+
+      expect(server.headersSeen[0]['x-user-email']).toBe('ada@example.com');
+      expect(server.headersSeen[0]['0']).toBeUndefined();
+    });
+
+    it.each([
+      ['an undefined value', { 'x-user-email': undefined }],
+      ['a null value', { 'x-user-email': null }],
+    ])('%s is not sent', async (_name, headers) => {
+      const server = await startSse();
+      stop = server.stop;
+
+      await drain(client(server.url).streamConversational('t', {} as never, { headers: headers as never }));
+
+      expect(server.headersSeen[0]['x-user-email']).toBeUndefined();
+    });
+
+    it.each([42, true, ['a']])('a non-string value %j is a TypeError at call time', (value) => {
+      expect(() =>
+        client('http://gw.test').streamConversational('t', {} as never, { headers: { 'x-user-email': value } as never }),
+      ).toThrow(TypeError);
+    });
+
+    it('keys that differ only in case collapse and the last one wins', async () => {
+      const server = await startSse();
+      stop = server.stop;
+
+      await drain(
+        client(server.url).streamConversational('t', {} as never, {
+          headers: [
+            ['X-User-Email', 'first@example.com'],
+            ['x-user-email', 'last@example.com'],
+          ] as never,
+        }),
+      );
+      await drain(
+        client(server.url).streamConversational('t', {} as never, {
+          headers: { 'x-user-email': 'first@example.com', 'X-USER-EMAIL': 'last@example.com' },
+        }),
+      );
+
+      expect(server.headersSeen.map((h) => h['x-user-email'])).toEqual(['last@example.com', 'last@example.com']);
+    });
+  });
+
+  it('headers are snapshotted when the generator is created, not at the first next()', async () => {
+    const server = await startSse();
+    stop = server.stop;
+    const headers = { 'x-user-email': 'ada@example.com' };
+
+    const gen = client(server.url).streamConversational('t', {} as never, { headers });
+    headers['x-user-email'] = 'mallory@example.com';
+    await drain(gen);
+
+    expect(server.headersSeen[0]['x-user-email']).toBe('ada@example.com');
+  });
+
+  it('a signal aborted after the generator is created but before the first next() never reaches the server', async () => {
+    const server = await startSse(true);
+    stop = server.stop;
+    const controller = new AbortController();
+
+    const gen = client(server.url).streamConversational('t', {} as never, { signal: controller.signal });
+    controller.abort();
+
+    await expect(gen.next()).rejects.toMatchObject({ name: 'AbortError' });
+    expect(server.headersSeen).toHaveLength(0);
   });
 
   it('two concurrent streams each send their own x-user-email', async () => {
