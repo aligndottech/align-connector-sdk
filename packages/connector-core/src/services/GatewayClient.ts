@@ -51,8 +51,19 @@ export interface GatewayClientConfig {
   timeoutMs?: number;
 }
 
-/** Headers request() builds itself. A caller's copy of any of these, in any case, is dropped. */
-const BUILT_HEADERS = new Set(['authorization', 'x-tenant-id', 'content-type']);
+/**
+ * Headers the client builds itself, on a request or a stream. A caller's copy of any of these,
+ * in any letter case, is dropped, so the built value is the only one on the wire.
+ */
+const BUILT_HEADERS = new Set(['authorization', 'x-tenant-id', 'content-type', 'accept']);
+
+function withoutBuiltHeaders(callerHeaders: Record<string, string> | undefined): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [key, value] of Object.entries(callerHeaders ?? {})) {
+    if (!BUILT_HEADERS.has(key.toLowerCase())) kept[key] = value;
+  }
+  return kept;
+}
 
 /** AbortSignal.any, with a fallback for Node 20.0 to 20.2, where it does not exist. */
 function anySignal(signals: AbortSignal[]): AbortSignal {
@@ -176,10 +187,7 @@ export class GatewayClient {
       signal?: AbortSignal;
     } = {}
   ): Promise<T> {
-    const headers: Record<string, string> = {};
-    for (const [key, value] of Object.entries(options.headers ?? {})) {
-      if (!BUILT_HEADERS.has(key.toLowerCase())) headers[key] = value;
-    }
+    const headers = withoutBuiltHeaders(options.headers);
 
     if (options.body) {
       headers['content-type'] = 'application/json';
@@ -261,13 +269,21 @@ export class GatewayClient {
    * Yields events: { type: 'token', data: { text: string } }
    *             or { type: 'complete', data: ConversationalResponse }
    *             or { type: 'error', data: { error: string } }
+   *
+   * `options.headers` are extra headers for this call only (for example x-user-email). A caller
+   * key matching authorization, x-tenant-id, content-type or accept, in any letter case, is
+   * dropped. `options.signal` aborts the stream's fetch and its reader; the generator then
+   * rejects with the signal's reason. There is no default timeout on a stream, by design: one
+   * would cut a healthy stream.
    */
   async *streamConversational(
     tenantId: string,
     payload: ConversationalRequest,
+    options: { headers?: Record<string, string>; signal?: AbortSignal } = {},
   ): AsyncGenerator<StreamEvent> {
     const url = `${this.gatewayUrl}/ingest/conversational/stream`;
     const headers: Record<string, string> = {
+      ...withoutBuiltHeaders(options.headers),
       'Content-Type': 'application/json',
       'x-tenant-id': tenantId,
       'Accept': 'text/event-stream',
@@ -278,6 +294,7 @@ export class GatewayClient {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+      signal: options.signal,
     });
 
     if (!response.ok) {
