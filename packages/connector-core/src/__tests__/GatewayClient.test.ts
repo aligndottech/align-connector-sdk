@@ -100,10 +100,11 @@ describe('GatewayClient', () => {
     expect(res).toBeUndefined();
   });
 
-  it('omits auth header when no bearer token is set', async () => {
-    mockFetch.mockResolvedValueOnce(jsonResponse({}));
-    await new GatewayClient({ gatewayUrl: 'http://gw:8080' }).ingest('t', {} as never);
-    expect(lastCall().opts.headers.authorization).toBeUndefined();
+  it('refuses to send when no bearer token is set', async () => {
+    await expect(new GatewayClient({ gatewayUrl: 'http://gw:8080' }).ingest('t', {} as never)).rejects.toMatchObject({
+      code: 'gateway_bearer_not_configured',
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it('fromEnv reads GATEWAY_URL / GATEWAY_BEARER_TOKEN with a default', async () => {

@@ -1,9 +1,14 @@
+import { GatewayBearerNotConfiguredError, normaliseBearer, resolveGatewayBearer } from '@aligndottech/connector-core';
 import { fetch as undiciFetch } from 'undici';
 
 export interface CredentialResolverConfig {
   /** Platform name (e.g., 'jira', 'github') — used in error messages */
   platform: string;
-  /** Map of credential key to env var name. E.g., { token: 'JIRA_API_TOKEN' } */
+  /**
+   * Map of credential key to env var name. E.g., { token: 'JIRA_API_TOKEN' }.
+   * Honoured only when NODE_ENV is 'test': an ambient variable would hand one credential to
+   * every tenant a pod serves, skipping the gateway exchange that scopes it.
+   */
   envVars?: Record<string, string>;
   /** Header name for direct token pass-through. E.g., 'x-github-token' */
   directTokenHeader?: string;
@@ -11,7 +16,11 @@ export interface CredentialResolverConfig {
   gatewayEndpoint: string;
   /** Gateway base URL. Defaults to GATEWAY_URL env var */
   gatewayUrl?: string;
-  /** Service-to-service bearer token. Defaults to GATEWAY_BEARER_TOKEN env var */
+  /**
+   * Service-to-service bearer token. Defaults to GATEWAY_BEARER_TOKEN, then SERVICE_AUTH_TOKEN.
+   * The exchange rejects with `gateway_bearer_not_configured` when the caller sent no bearer
+   * of their own and none of these is set.
+   */
   gatewayBearerToken?: string;
   /** Override fetch for testing */
   fetchFn?: typeof undiciFetch;
@@ -37,7 +46,7 @@ export class BaseCredentialResolver {
     }
 
     // Tier 1b: Environment variables
-    if (this.config.envVars) {
+    if (this.config.envVars && process.env.NODE_ENV === 'test') {
       const result: CredentialResult = {};
       let allPresent = true;
       for (const [key, envVar] of Object.entries(this.config.envVars)) {
@@ -49,7 +58,8 @@ export class BaseCredentialResolver {
     }
 
     // Tier 2: Gateway exchange
-    const { bearer, tenantId } = ctx;
+    const bearer = normaliseBearer(ctx.bearer);
+    const { tenantId } = ctx;
     if (!bearer && !tenantId) throw new Error('unauthorized');
 
     const gatewayUrl = this.config.gatewayUrl ?? process.env.GATEWAY_URL ?? 'http://gateway:8080';
@@ -58,8 +68,11 @@ export class BaseCredentialResolver {
     if (bearer) headers['authorization'] = `Bearer ${bearer}`;
     if (tenantId) headers['x-tenant-id'] = tenantId;
 
-    const gatewayBearer = this.config.gatewayBearerToken ?? process.env.GATEWAY_BEARER_TOKEN;
-    if (gatewayBearer && !bearer) headers['authorization'] = `Bearer ${gatewayBearer}`;
+    if (!bearer) {
+      const gatewayBearer = normaliseBearer(this.config.gatewayBearerToken) ?? resolveGatewayBearer();
+      if (!gatewayBearer) throw new GatewayBearerNotConfiguredError();
+      headers['authorization'] = `Bearer ${gatewayBearer}`;
+    }
 
     const fetchFn = this.config.fetchFn ?? undiciFetch;
     const response = await fetchFn(`${gatewayUrl}${this.config.gatewayEndpoint}`, {
