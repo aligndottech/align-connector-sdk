@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.12.0...connector-core-v0.13.0) (2026-10-25)
+
+
+### Features
+
+* **connector-core:** accept per-call headers and a signal on GatewayClient.streamConversational ([#54](https://github.com/aligndottech/align-connector-sdk/issues/54)) ([9ec8099](https://github.com/aligndottech/align-connector-sdk/commit/9ec809980630ce2f7b1b98d04eb7b7f744603778))
+
 ## [0.12.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.11.0...connector-core-v0.12.0) (2026-10-25)
 
 
