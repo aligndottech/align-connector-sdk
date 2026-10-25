@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Response } from 'undici';
@@ -22,7 +23,10 @@ function recordingFetch() {
 
 /** Exposes the protected request() seam that subclasses (and these tests) build on. */
 class Probe extends GatewayClient {
-  call<T>(path: string, options?: { signal?: AbortSignal }): Promise<T> {
+  call<T>(
+    path: string,
+    options?: { signal?: AbortSignal; headers?: Record<string, string>; tenantId?: string; body?: unknown },
+  ): Promise<T> {
     return this.request<T>(path, options);
   }
 }
@@ -111,6 +115,28 @@ describe('GatewayClient transport', () => {
       await expect(client.streamConversational('t1', {} as never).next()).rejects.toMatchObject(NOT_CONFIGURED);
 
       expect(calls).toHaveLength(0);
+    });
+
+    it.each(['   ', '\t\n', ''])('a client built with the blank bearer %j rejects and sends nothing', async (blank) => {
+      const { fetchFn, calls } = recordingFetch();
+      const client = new GatewayClient({ gatewayUrl: 'http://gw.test', bearerToken: blank, fetch: fetchFn });
+
+      await expect(client.getDecision('t1', 'd1')).rejects.toMatchObject(NOT_CONFIGURED);
+      await expect(client.streamConversational('t1', {} as never).next()).rejects.toMatchObject(NOT_CONFIGURED);
+
+      expect(calls).toHaveLength(0);
+    });
+
+    it('a bearer with surrounding whitespace is sent trimmed', async () => {
+      const { fetchFn, calls } = recordingFetch();
+      await new GatewayClient({ gatewayUrl: 'http://gw.test', bearerToken: ' k ', fetch: fetchFn }).getDecision('t', 'd');
+      expect(calls[0].init.headers).toMatchObject({ authorization: 'Bearer k' });
+    });
+
+    it('positive control: a client built with bearer k makes exactly one call', async () => {
+      const { fetchFn, calls } = recordingFetch();
+      await new GatewayClient({ gatewayUrl: 'http://gw.test', bearerToken: 'k', fetch: fetchFn }).getDecision('t', 'd');
+      expect(calls).toHaveLength(1);
     });
 
     it('positive control: with a bearer the same call reaches the server exactly once', async () => {
@@ -226,6 +252,108 @@ describe('GatewayClient transport', () => {
       await assertion;
 
       expect(await serverSawClose(server)).toBe(true);
+    });
+  });
+
+  describe('the combined signal works without AbortSignal.any (Node 20.0 to 20.2)', () => {
+    const original = AbortSignal.any;
+    beforeEach(() => {
+      (AbortSignal as unknown as { any: unknown }).any = undefined;
+    });
+    afterEach(() => {
+      (AbortSignal as unknown as { any: unknown }).any = original;
+    });
+
+    it('a per-call signal plus a timeout still aborts the socket', async () => {
+      const server = await startServer(true);
+      stop = server.stop;
+      const client = new Probe({ gatewayUrl: server.url, bearerToken: 'k', timeoutMs: 60_000 });
+      const controller = new AbortController();
+
+      const pending = client.call('/anything', { signal: controller.signal });
+      const assertion = expect(pending).rejects.toBeInstanceOf(Error);
+      await vi.waitFor(() => expect(server.seen).toHaveLength(1));
+      controller.abort();
+      await assertion;
+
+      const grace = new Promise<false>((resolve) => setTimeout(() => resolve(false), 1500));
+      expect(await Promise.race([Promise.all(server.closed).then(() => true as const), grace])).toBe(true);
+    });
+
+    it('the timeout half still aborts when the caller signal never fires', async () => {
+      const server = await startServer(true);
+      stop = server.stop;
+      const client = new Probe({ gatewayUrl: server.url, bearerToken: 'k', timeoutMs: 100 });
+
+      await expect(client.call('/anything', { signal: new AbortController().signal })).rejects.toMatchObject({
+        name: 'TimeoutError',
+      });
+    });
+
+    it('an already-aborted caller signal never reaches the server', async () => {
+      const server = await startServer(true);
+      stop = server.stop;
+      const client = new Probe({ gatewayUrl: server.url, bearerToken: 'k', timeoutMs: 60_000 });
+
+      await expect(client.call('/anything', { signal: AbortSignal.abort() })).rejects.toMatchObject({ name: 'AbortError' });
+
+      expect(server.seen).toHaveLength(0);
+    });
+  });
+
+  describe('built headers win over caller headers in any letter case', () => {
+    it('sends one authorization, one x-tenant-id and one content-type, with the built values', async () => {
+      const { fetchFn, calls } = recordingFetch();
+      const client = new Probe({ gatewayUrl: 'http://gw.test', bearerToken: 'real', fetch: fetchFn });
+
+      await client.call('/x', {
+        tenantId: 'real-tenant',
+        body: { a: 1 },
+        headers: {
+          Authorization: 'Bearer forged',
+          'X-Tenant-Id': 'forged-tenant',
+          'Content-Type': 'text/plain',
+          'x-align-platform': 'slack',
+        },
+      });
+
+      const sent = calls[0].init.headers as Record<string, string>;
+      const keys = Object.keys(sent).map((k) => k.toLowerCase());
+      expect(keys.filter((k) => k === 'authorization')).toHaveLength(1);
+      expect(keys.filter((k) => k === 'x-tenant-id')).toHaveLength(1);
+      expect(keys.filter((k) => k === 'content-type')).toHaveLength(1);
+      expect(sent).toMatchObject({
+        authorization: 'Bearer real',
+        'x-tenant-id': 'real-tenant',
+        'content-type': 'application/json',
+        'x-align-platform': 'slack',
+      });
+    });
+
+    it('drops a caller authorization even when the call has no tenant or body of its own', async () => {
+      const { fetchFn, calls } = recordingFetch();
+      const client = new Probe({ gatewayUrl: 'http://gw.test', bearerToken: 'real', fetch: fetchFn });
+
+      await client.call('/x', { headers: { AUTHORIZATION: 'Bearer forged' } });
+
+      expect(calls[0].init.headers).toEqual({ authorization: 'Bearer real' });
+    });
+  });
+
+  describe('the bearer is not printable', () => {
+    const SECRET = 'super-secret-bearer-value';
+    const client = () => new GatewayClient({ gatewayUrl: 'http://gw.test', bearerToken: SECRET });
+
+    it('JSON.stringify does not include it', () => {
+      const out = JSON.stringify(client());
+      expect(out).toContain('gw.test'); // positive control: the serialiser did see the object
+      expect(out).not.toContain(SECRET);
+    });
+
+    it('util.inspect does not include it', () => {
+      const out = inspect(client(), { depth: 5, showHidden: true });
+      expect(out).toContain('gw.test'); // positive control
+      expect(out).not.toContain(SECRET);
     });
   });
 

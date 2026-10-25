@@ -1,4 +1,4 @@
-import { GatewayBearerNotConfiguredError, resolveGatewayBearer } from '@aligndottech/connector-core';
+import { GatewayBearerNotConfiguredError, normaliseBearer, resolveGatewayBearer } from '@aligndottech/connector-core';
 import { fetch as undiciFetch } from 'undici';
 
 export interface CredentialResolverConfig {
@@ -58,7 +58,8 @@ export class BaseCredentialResolver {
     }
 
     // Tier 2: Gateway exchange
-    const { bearer, tenantId } = ctx;
+    const bearer = normaliseBearer(ctx.bearer);
+    const { tenantId } = ctx;
     if (!bearer && !tenantId) throw new Error('unauthorized');
 
     const gatewayUrl = this.config.gatewayUrl ?? process.env.GATEWAY_URL ?? 'http://gateway:8080';
@@ -68,7 +69,7 @@ export class BaseCredentialResolver {
     if (tenantId) headers['x-tenant-id'] = tenantId;
 
     if (!bearer) {
-      const gatewayBearer = this.config.gatewayBearerToken?.trim() || resolveGatewayBearer();
+      const gatewayBearer = normaliseBearer(this.config.gatewayBearerToken) ?? resolveGatewayBearer();
       if (!gatewayBearer) throw new GatewayBearerNotConfiguredError();
       headers['authorization'] = `Bearer ${gatewayBearer}`;
     }

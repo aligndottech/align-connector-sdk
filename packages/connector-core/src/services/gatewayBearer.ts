@@ -24,5 +24,14 @@ export class GatewayBearerNotConfiguredError extends Error {
  * masking it. Returns undefined when neither holds a value.
  */
 export function resolveGatewayBearer(): string | undefined {
-  return process.env.GATEWAY_BEARER_TOKEN?.trim() || process.env.SERVICE_AUTH_TOKEN?.trim() || undefined;
+  return normaliseBearer(process.env.GATEWAY_BEARER_TOKEN) ?? normaliseBearer(process.env.SERVICE_AUTH_TOKEN);
+}
+
+/**
+ * The one place a bearer is cleaned: trimmed, and a blank value counts as absent. Every path
+ * that accepts a bearer (constructor, env, a caller's own) goes through it, so none of them can
+ * send `Authorization: Bearer ` with nothing after it.
+ */
+export function normaliseBearer(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
 }

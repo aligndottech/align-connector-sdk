@@ -7,7 +7,7 @@
  */
 
 import { fetch as undiciFetch } from 'undici';
-import { GatewayBearerNotConfiguredError, resolveGatewayBearer } from './gatewayBearer.js';
+import { GatewayBearerNotConfiguredError, normaliseBearer, resolveGatewayBearer } from './gatewayBearer.js';
 import type {
   ConsensusResponse,
   ConversationalRequest,
@@ -41,10 +41,31 @@ export interface GatewayClientConfig {
   gatewayUrl: string;
   /** Without one, every call rejects with `gateway_bearer_not_configured` and sends nothing. */
   bearerToken?: string;
-  /** The fetch to call. Defaults to undici's. Lets a caller retry a 401 with a fallback token. */
+  /**
+   * The fetch to call. Defaults to undici's. The client still refuses before calling it when no
+   * bearer is configured, and whatever fetch is injected is trusted with the request headers,
+   * including the bearer.
+   */
   fetch?: typeof undiciFetch;
   /** Aborts any request still unanswered after this long. Not applied to streamConversational. */
   timeoutMs?: number;
+}
+
+/** Headers request() builds itself. A caller's copy of any of these, in any case, is dropped. */
+const BUILT_HEADERS = new Set(['authorization', 'x-tenant-id', 'content-type']);
+
+/** AbortSignal.any, with a fallback for Node 20.0 to 20.2, where it does not exist. */
+function anySignal(signals: AbortSignal[]): AbortSignal {
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals);
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  }
+  return controller.signal;
 }
 
 /**
@@ -108,14 +129,15 @@ async function* parseSSEStream(
  */
 export class GatewayClient {
   private gatewayUrl: string;
-  private bearerToken?: string;
-  private fetchImpl: typeof undiciFetch;
+  // Runtime-private (#), unlike the TS-private fields: JSON.stringify and util.inspect skip it.
+  #bearer?: string;
+  #fetch: typeof undiciFetch;
   private timeoutMs?: number;
 
   constructor(config: GatewayClientConfig) {
     this.gatewayUrl = config.gatewayUrl;
-    this.bearerToken = config.bearerToken;
-    this.fetchImpl = config.fetch ?? undiciFetch;
+    this.#bearer = normaliseBearer(config.bearerToken);
+    this.#fetch = config.fetch ?? undiciFetch;
     this.timeoutMs = config.timeoutMs;
   }
 
@@ -130,8 +152,8 @@ export class GatewayClient {
   }
 
   private requireBearer(): string {
-    if (!this.bearerToken) throw new GatewayBearerNotConfiguredError();
-    return this.bearerToken;
+    if (!this.#bearer) throw new GatewayBearerNotConfiguredError();
+    return this.#bearer;
   }
 
   /**
@@ -145,16 +167,19 @@ export class GatewayClient {
       tenantId?: string;
       /**
        * Extra headers a caller wants attached (e.g. x-align-platform, ALI-691). Additive
-       * only: spread first so the headers this method itself resolves below (auth, tenant
-       * scoping, content-type) always win on a key collision, rather than a caller being
-       * able to launder a request past them.
+       * only: a caller key that matches a header this method builds below (authorization,
+       * x-tenant-id, content-type), in any letter case, is dropped, so a caller cannot
+       * launder a request past them.
        */
       headers?: Record<string, string>;
       /** Aborts this request. Combined with the client's `timeoutMs` when both are set. */
       signal?: AbortSignal;
     } = {}
   ): Promise<T> {
-    const headers: Record<string, string> = { ...options.headers };
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(options.headers ?? {})) {
+      if (!BUILT_HEADERS.has(key.toLowerCase())) headers[key] = value;
+    }
 
     if (options.body) {
       headers['content-type'] = 'application/json';
@@ -169,11 +194,11 @@ export class GatewayClient {
     const signals = [options.signal, this.timeoutMs ? AbortSignal.timeout(this.timeoutMs) : undefined].filter(
       (s): s is AbortSignal => s !== undefined,
     );
-    const response = await this.fetchImpl(`${this.gatewayUrl}${path}`, {
+    const response = await this.#fetch(`${this.gatewayUrl}${path}`, {
       method: options.method || 'GET',
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
+      signal: signals.length > 1 ? anySignal(signals) : signals[0],
     });
 
     if (!response.ok) {
@@ -249,7 +274,7 @@ export class GatewayClient {
       Authorization: `Bearer ${this.requireBearer()}`,
     };
 
-    const response = await this.fetchImpl(url, {
+    const response = await this.#fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),

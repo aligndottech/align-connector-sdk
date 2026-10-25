@@ -102,6 +102,7 @@ export {
 export {
   GATEWAY_BEARER_NOT_CONFIGURED,
   GatewayBearerNotConfiguredError,
+  normaliseBearer,
   resolveGatewayBearer,
 } from './services/gatewayBearer.js';
 export {

@@ -181,6 +181,33 @@ describe('BaseCredentialResolver', () => {
       expect(authorizationOf(both)).toBe('Bearer relay-key');
     });
 
+    it.each(['  ', '\t'])('a blank caller bearer %j falls through to the service bearer', async (blank) => {
+      vi.stubEnv('SERVICE_AUTH_TOKEN', 'shared-token');
+      const fetchFn = okFetch();
+      await exchange(fetchFn).resolve({ bearer: blank, tenantId: 'tenant-123' });
+      expect(authorizationOf(fetchFn)).toBe('Bearer shared-token');
+    });
+
+    it('a blank caller bearer with no service bearer rejects and sends nothing', async () => {
+      const fetchFn = vi.fn();
+      await expect(exchange(fetchFn).resolve({ bearer: '   ', tenantId: 'tenant-123' })).rejects.toMatchObject({
+        code: 'gateway_bearer_not_configured',
+      });
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it('a blank caller bearer and no tenant is unauthorized', async () => {
+      const fetchFn = vi.fn();
+      await expect(exchange(fetchFn).resolve({ bearer: '  ' })).rejects.toThrow('unauthorized');
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it('positive control: caller bearer k makes exactly one call', async () => {
+      const fetchFn = okFetch();
+      await exchange(fetchFn).resolve({ bearer: 'k' });
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
     it("the caller's own bearer still wins and needs no service bearer", async () => {
       const fetchFn = okFetch();
       await exchange(fetchFn).resolve({ bearer: 'user-bearer', tenantId: 'tenant-123' });
