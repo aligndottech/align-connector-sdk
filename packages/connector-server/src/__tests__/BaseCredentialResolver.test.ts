@@ -1,14 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BaseCredentialResolver } from '../auth/BaseCredentialResolver.js';
 
 describe('BaseCredentialResolver', () => {
-  const originalEnv = { ...process.env };
+  beforeEach(() => {
+    vi.stubEnv('GATEWAY_BEARER_TOKEN', undefined);
+    vi.stubEnv('SERVICE_AUTH_TOKEN', undefined);
+  });
   afterEach(() => {
-    process.env = { ...originalEnv };
+    vi.unstubAllEnvs();
   });
 
   it('should resolve from env vars when configured (Tier 1b)', async () => {
-    process.env.MY_TOKEN = 'test-token';
+    vi.stubEnv('MY_TOKEN', 'test-token');
     const resolver = new BaseCredentialResolver({
       platform: 'test',
       envVars: { token: 'MY_TOKEN' },
@@ -71,8 +74,8 @@ describe('BaseCredentialResolver', () => {
   });
 
   it('should support multi-value credentials (e.g., apiKey + appKey)', async () => {
-    process.env.DD_API_KEY = 'api';
-    process.env.DD_APP_KEY = 'app';
+    vi.stubEnv('DD_API_KEY', 'api');
+    vi.stubEnv('DD_APP_KEY', 'app');
     const resolver = new BaseCredentialResolver({
       platform: 'datadog',
       envVars: { apiKey: 'DD_API_KEY', appKey: 'DD_APP_KEY' },
@@ -90,6 +93,7 @@ describe('BaseCredentialResolver', () => {
     const resolver = new BaseCredentialResolver({
       platform: 'jira',
       gatewayEndpoint: '/integrations/jira/credentials',
+      gatewayBearerToken: 'service-key',
       fetchFn: mockFetch as any,
     });
     const creds = await resolver.resolve({ tenantId: 'tenant-123' });
@@ -97,13 +101,13 @@ describe('BaseCredentialResolver', () => {
     expect(mockFetch).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
-        headers: expect.objectContaining({ 'x-tenant-id': 'tenant-123' }),
+        headers: expect.objectContaining({ 'x-tenant-id': 'tenant-123', authorization: 'Bearer service-key' }),
       })
     );
   });
 
   it('should prioritize direct header over env vars', async () => {
-    process.env.MY_TOKEN = 'env-token';
+    vi.stubEnv('MY_TOKEN', 'env-token');
     const resolver = new BaseCredentialResolver({
       platform: 'test',
       directTokenHeader: 'x-test-token',
@@ -126,5 +130,58 @@ describe('BaseCredentialResolver', () => {
       fetchFn: mockFetch as any,
     });
     await expect(resolver.resolve({ bearer: 'tok' })).rejects.toThrow('test_creds_missing:base_url');
+  });
+  describe('fails closed when the gateway exchange has no credential', () => {
+    const exchange = (fetchFn: unknown, extra: object = {}) =>
+      new BaseCredentialResolver({
+        platform: 'jira',
+        gatewayEndpoint: '/integrations/jira/credentials',
+        fetchFn: fetchFn as any,
+        ...extra,
+      });
+
+    it('a tenantId with no caller bearer and no service bearer rejects and sends nothing', async () => {
+      const fetchFn = vi.fn();
+      await expect(exchange(fetchFn).resolve({ tenantId: 'tenant-123' })).rejects.toMatchObject({
+        code: 'gateway_bearer_not_configured',
+      });
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it('a blank configured service bearer counts as none', async () => {
+      const fetchFn = vi.fn();
+      await expect(
+        exchange(fetchFn, { gatewayBearerToken: '  ' }).resolve({ tenantId: 'tenant-456' }),
+      ).rejects.toMatchObject({ code: 'gateway_bearer_not_configured' });
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    const okFetch = () => vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ token: 't' }) });
+    const authorizationOf = (fetchFn: ReturnType<typeof vi.fn>) => fetchFn.mock.calls[0][1].headers.authorization;
+
+    it('uses GATEWAY_BEARER_TOKEN from the environment when only it is set', async () => {
+      vi.stubEnv('GATEWAY_BEARER_TOKEN', 'relay-key');
+      const fetchFn = okFetch();
+      await exchange(fetchFn).resolve({ tenantId: 'tenant-123' });
+      expect(authorizationOf(fetchFn)).toBe('Bearer relay-key');
+    });
+
+    it('falls back to SERVICE_AUTH_TOKEN, and prefers GATEWAY_BEARER_TOKEN when both are set', async () => {
+      vi.stubEnv('SERVICE_AUTH_TOKEN', 'shared-token');
+      const onlyShared = okFetch();
+      await exchange(onlyShared).resolve({ tenantId: 'tenant-123' });
+      expect(authorizationOf(onlyShared)).toBe('Bearer shared-token');
+
+      vi.stubEnv('GATEWAY_BEARER_TOKEN', 'relay-key');
+      const both = okFetch();
+      await exchange(both).resolve({ tenantId: 'tenant-123' });
+      expect(authorizationOf(both)).toBe('Bearer relay-key');
+    });
+
+    it("the caller's own bearer still wins and needs no service bearer", async () => {
+      const fetchFn = okFetch();
+      await exchange(fetchFn).resolve({ bearer: 'user-bearer', tenantId: 'tenant-123' });
+      expect(authorizationOf(fetchFn)).toBe('Bearer user-bearer');
+    });
   });
 });

@@ -16,7 +16,7 @@ afterEach(() => vi.clearAllMocks());
 
 describe('GatewayClient.streamConversational', () => {
   it('should yield token and complete events from SSE stream', async () => {
-    const client = new GatewayClient({ gatewayUrl: 'http://localhost:8080' });
+    const client = new GatewayClient({ gatewayUrl: 'http://localhost:8080', bearerToken: 'tok' });
 
     const sseBody = [
       'event: token\ndata: {"text": "Hello"}\n\n',
@@ -64,7 +64,7 @@ describe('GatewayClient.streamConversational', () => {
   });
 
   it('should yield error event on HTTP failure', async () => {
-    const client = new GatewayClient({ gatewayUrl: 'http://localhost:8080' });
+    const client = new GatewayClient({ gatewayUrl: 'http://localhost:8080', bearerToken: 'tok' });
 
     vi.mocked(fetch).mockResolvedValueOnce({
       ok: false,

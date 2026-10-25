@@ -6,7 +6,8 @@
  * DO NOT create duplicate GatewayRepository implementations in connector packages.
  */
 
-import { fetch } from 'undici';
+import { fetch as undiciFetch } from 'undici';
+import { GatewayBearerNotConfiguredError, resolveGatewayBearer } from './gatewayBearer.js';
 import type {
   ConsensusResponse,
   ConversationalRequest,
@@ -38,7 +39,12 @@ export interface JiraCredentials {
 
 export interface GatewayClientConfig {
   gatewayUrl: string;
+  /** Without one, every call rejects with `gateway_bearer_not_configured` and sends nothing. */
   bearerToken?: string;
+  /** The fetch to call. Defaults to undici's. Lets a caller retry a 401 with a fallback token. */
+  fetch?: typeof undiciFetch;
+  /** Aborts any request still unanswered after this long. Not applied to streamConversational. */
+  timeoutMs?: number;
 }
 
 /**
@@ -103,10 +109,14 @@ async function* parseSSEStream(
 export class GatewayClient {
   private gatewayUrl: string;
   private bearerToken?: string;
+  private fetchImpl: typeof undiciFetch;
+  private timeoutMs?: number;
 
   constructor(config: GatewayClientConfig) {
     this.gatewayUrl = config.gatewayUrl;
     this.bearerToken = config.bearerToken;
+    this.fetchImpl = config.fetch ?? undiciFetch;
+    this.timeoutMs = config.timeoutMs;
   }
 
   /**
@@ -115,8 +125,13 @@ export class GatewayClient {
   static fromEnv(): GatewayClient {
     return new GatewayClient({
       gatewayUrl: process.env.GATEWAY_URL || 'http://gateway:8080',
-      bearerToken: process.env.GATEWAY_BEARER_TOKEN,
+      bearerToken: resolveGatewayBearer(),
     });
+  }
+
+  private requireBearer(): string {
+    if (!this.bearerToken) throw new GatewayBearerNotConfiguredError();
+    return this.bearerToken;
   }
 
   /**
@@ -135,6 +150,8 @@ export class GatewayClient {
        * able to launder a request past them.
        */
       headers?: Record<string, string>;
+      /** Aborts this request. Combined with the client's `timeoutMs` when both are set. */
+      signal?: AbortSignal;
     } = {}
   ): Promise<T> {
     const headers: Record<string, string> = { ...options.headers };
@@ -143,18 +160,20 @@ export class GatewayClient {
       headers['content-type'] = 'application/json';
     }
 
-    if (this.bearerToken) {
-      headers['authorization'] = `Bearer ${this.bearerToken}`;
-    }
+    headers['authorization'] = `Bearer ${this.requireBearer()}`;
 
     if (options.tenantId) {
       headers['x-tenant-id'] = options.tenantId;
     }
 
-    const response = await fetch(`${this.gatewayUrl}${path}`, {
+    const signals = [options.signal, this.timeoutMs ? AbortSignal.timeout(this.timeoutMs) : undefined].filter(
+      (s): s is AbortSignal => s !== undefined,
+    );
+    const response = await this.fetchImpl(`${this.gatewayUrl}${path}`, {
       method: options.method || 'GET',
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
     });
 
     if (!response.ok) {
@@ -227,12 +246,10 @@ export class GatewayClient {
       'Content-Type': 'application/json',
       'x-tenant-id': tenantId,
       'Accept': 'text/event-stream',
+      Authorization: `Bearer ${this.requireBearer()}`,
     };
-    if (this.bearerToken) {
-      headers['Authorization'] = `Bearer ${this.bearerToken}`;
-    }
 
-    const response = await fetch(url, {
+    const response = await this.fetchImpl(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),

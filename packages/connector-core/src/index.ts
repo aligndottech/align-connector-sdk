@@ -100,6 +100,11 @@ export {
   type JiraCredentials,
 } from './services/GatewayClient.js';
 export {
+  GATEWAY_BEARER_NOT_CONFIGURED,
+  GatewayBearerNotConfiguredError,
+  resolveGatewayBearer,
+} from './services/gatewayBearer.js';
+export {
   consumeStreamWithProgressiveUpdates,
   type MessageUpdater,
   type StreamConsumerOptions,
