@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.11.0...connector-server-v0.12.0) (2026-10-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **connector-core:** GatewayClient and BaseCredentialResolver now refuse a call that used to go out with no credential, rejecting with gateway_bearer_not_configured. fromEnv() also reads SERVICE_AUTH_TOKEN when GATEWAY_BEARER_TOKEN is unset, and BaseCredentialResolver honours its envVars tier only when NODE_ENV is test.
+
+### Features
+
+* **connector-core:** fail closed without a gateway bearer, add signal, timeout and injectable fetch to GatewayClient ([#52](https://github.com/aligndottech/align-connector-sdk/issues/52)) ([95852ad](https://github.com/aligndottech/align-connector-sdk/commit/95852add42550d5768c29796b36bc10602bd609b))
+
 ## [0.11.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-server-v0.10.1...connector-server-v0.11.0) (2026-10-10)
 
 
