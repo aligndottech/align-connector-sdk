@@ -78,6 +78,28 @@ describe('Jira: a JQL fragment narrows the chosen projects', () => {
     expect(sent).toEqual([]);
   });
 
+  // Jira may read curly quotes as string delimiters, which this check would not see, so parentheses
+  // hidden inside them could close the project clause. Refused, never guessed at.
+  it('curly quotes are refused before any request', async () => {
+    const sent = serve(jiraEmpty);
+    await expect(new JiraFetcher().fetch({ ...OAUTH, projects: ['AC'], jql: 'labels = \u201c(\u201d ) OR project = SECRET OR (\u201c)\u201d' })).rejects.toThrow(/JQL/);
+    await expect(new JiraFetcher().fetch({ ...OAUTH, projects: ['AC'], jql: 'summary ~ \u2018x\u2019' })).rejects.toThrow(/JQL/);
+    expect(sent).toEqual([]);
+  });
+
+  it('a backslash outside quotes is refused before any request', async () => {
+    const sent = serve(jiraEmpty);
+    await expect(new JiraFetcher().fetch({ ...OAUTH, projects: ['AC'], jql: 'a \\( ) OR project = SECRET OR ( \\)' })).rejects.toThrow(/JQL/);
+    await expect(new JiraFetcher().fetch({ ...OAUTH, projects: ['AC'], jql: 'labels = a \\' })).rejects.toThrow(/JQL/);
+    expect(sent).toEqual([]);
+  });
+
+  it('a backslash escape inside quotes is still allowed', async () => {
+    const sent = serve(jiraEmpty);
+    await new JiraFetcher().fetch({ ...OAUTH, projects: ['AC'], jql: 'summary ~ "say \\"hi\\""' });
+    expect(sent[0]!.jql).toBe('project in (AC) AND (summary ~ "say \\"hi\\"") ORDER BY updated DESC');
+  });
+
   it('a parenthesis inside quotes does not count', async () => {
     const sent = serve(jiraEmpty);
     await new JiraFetcher().fetch({ ...OAUTH, projects: ['AC'], jql: 'summary ~ "a)"' });
@@ -117,6 +139,13 @@ describe('Linear: projects narrow the chosen teams', () => {
       project: { id: { in: ['proj-a'] } },
       updatedAt: { gte: '2026-03-01T00:00:00.000Z' },
     });
+  });
+
+  it('an empty project id is refused before any request', async () => {
+    const sent = serve(linearEmpty);
+    await expect(new LinearFetcher().fetch({ token: 'lin_api_x', teams: ['team-1'], projects: [''] })).rejects.toThrow(/project/);
+    await expect(new LinearFetcher().fetch({ token: 'lin_api_x', teams: ['team-1'], projects: ['proj-a', '  '] })).rejects.toThrow(/project/);
+    expect(sent).toEqual([]);
   });
 
   it('projects without teams are refused before any request', async () => {

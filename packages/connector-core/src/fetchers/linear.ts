@@ -222,6 +222,7 @@ export class LinearFetcher implements ConnectorFetcher {
     const updatedAt = since || until ? { ...(since ? { gte: since } : {}), ...(until ? { lt: until } : {}) } : undefined;
     const projects = opts.projects ?? [];
     if (projects.length > 0 && !team) throw new Error('Linear projects narrow named teams; give the team ids too.');
+    if (projects.some((id) => id.trim() === '')) throw new Error('A Linear project id is empty.');
     const filter =
       team || updatedAt
         ? {

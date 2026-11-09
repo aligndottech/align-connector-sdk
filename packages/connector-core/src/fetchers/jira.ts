@@ -93,6 +93,9 @@ export function buildJiraJql(opts: { projects?: string[]; jql?: string; since?: 
   return `${[scope, ...(narrow ? [`(${narrow})`] : []), ...bounds].join(' AND ')} ORDER BY updated DESC`;
 }
 
+/** Opening and closing quote punctuation (Unicode Pi/Pf), the low-9 and full-width quotes, and primes. */
+const TYPOGRAPHIC_QUOTE = /[\p{Pi}\p{Pf}\u201A\u201E\uFF02\uFF07\u2032\u2033]/u;
+
 /**
  * A narrowing fragment ready to AND: trimmed, its own ORDER BY dropped (a board filter carries one),
  * and refused when its parentheses or quotes do not balance, because an unbalanced fragment could
@@ -101,6 +104,8 @@ export function buildJiraJql(opts: { projects?: string[]; jql?: string; since?: 
  */
 function narrowingJql(jql: string | undefined): string {
   const text = (jql ?? '').trim();
+  // Jira may read typographic quotes as string delimiters, which the scan below cannot see. Refused, never guessed at.
+  if (TYPOGRAPHIC_QUOTE.test(text)) throw new Error('The Jira JQL filter has typographic quotes; use straight quotes.');
   let masked = '';
   let quote: string | undefined;
   let depth = 0;
@@ -113,6 +118,8 @@ function narrowingJql(jql: string | undefined): string {
       continue;
     }
     if (c === '"' || c === "'") { quote = c; masked += 'x'; continue; }
+    // An escape outside a string could hide a parenthesis from this scan.
+    if (c === '\\') throw new Error('The Jira JQL filter has a backslash outside quotes.');
     if (c === '(') depth++;
     if (c === ')' && --depth < 0) break;
     masked += c;
