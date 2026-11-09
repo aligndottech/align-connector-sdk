@@ -79,6 +79,8 @@ interface LinearIssueNode {
  *  teams (`scope: 'team'`); without it the read stays the caller's assigned and created issues. */
 export interface LinearFetcherOptions extends ConnectorFetcherOptions {
   teams?: string[];
+  /** Narrows a `teams` read to these project ids. Never stands alone. */
+  projects?: string[];
   /** Test seam for pacing and the time budget. */
   clock?: Clock;
 }
@@ -218,8 +220,17 @@ export class LinearFetcher implements ConnectorFetcher {
     if (!win.ok) return refusedRead({ platform: 'linear', requested: limit, scope: team ? 'team' : 'yours', detail: win.detail });
     const { since, until } = win;
     const updatedAt = since || until ? { ...(since ? { gte: since } : {}), ...(until ? { lt: until } : {}) } : undefined;
+    const projects = opts.projects ?? [];
+    if (projects.length > 0 && !team) throw new Error('Linear projects narrow named teams; give the team ids too.');
+    if (projects.some((id) => id.trim() === '')) throw new Error('A Linear project id is empty.');
     const filter =
-      team || updatedAt ? { ...(team ? { team: { id: { in: teams } } } : {}), ...(updatedAt ? { updatedAt } : {}) } : undefined;
+      team || updatedAt
+        ? {
+            ...(team ? { team: { id: { in: teams } } } : {}),
+            ...(projects.length > 0 ? { project: { id: { in: projects } } } : {}),
+            ...(updatedAt ? { updatedAt } : {}),
+          }
+        : undefined;
     const deadline = deadlineFrom(opts.timeBudgetMs, clock);
     const ctx: ReadContext = {
       token: opts.token,

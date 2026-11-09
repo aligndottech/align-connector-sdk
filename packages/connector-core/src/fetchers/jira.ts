@@ -54,6 +54,8 @@ const jqlDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
  */
 export interface JiraFetcherOptions extends ConnectorFetcherOptions {
   projects?: string[];
+  /** Narrows a `projects` read, e.g. a board's filter. Always ANDed inside the projects; never stands alone. */
+  jql?: string;
   /** Test seam for the time budget. */
   clock?: Clock;
 }
@@ -73,8 +75,10 @@ function extractAdfText(adf: { content?: Array<{ content?: Array<{ text?: string
  * two days after `until` (UTC+14 is the furthest profile): a little more than asked, never less (the consumer upserts).
  * With no window and no projects it is exactly the JQL used before S2.
  */
-export function buildJiraJql(opts: { projects?: string[]; since?: string; until?: string }): string {
+export function buildJiraJql(opts: { projects?: string[]; jql?: string; since?: string; until?: string }): string {
   const projects = opts.projects ?? [];
+  const narrow = narrowingJql(opts.jql);
+  if (narrow && projects.length === 0) throw new Error('A Jira JQL filter narrows named projects; give the project keys too.');
   for (const key of projects) {
     if (!PROJECT_KEY.test(key)) throw new Error(`Jira project key ${JSON.stringify(key)} is not a project key (letters, digits, underscore).`);
   }
@@ -86,7 +90,43 @@ export function buildJiraJql(opts: { projects?: string[]; since?: string; until?
     ...(win.untilMs === undefined ? [] : [`updated < "${jqlDay(win.untilMs + 2 * DAY_MS)}"`]),
   ];
   const scope = projects.length > 0 ? `project in (${projects.join(', ')})` : bounds.length > 0 ? `(${mine})` : mine;
-  return `${[scope, ...bounds].join(' AND ')} ORDER BY updated DESC`;
+  return `${[scope, ...(narrow ? [`(${narrow})`] : []), ...bounds].join(' AND ')} ORDER BY updated DESC`;
+}
+
+/** Opening and closing quote punctuation (Unicode Pi/Pf), the low-9 and full-width quotes, and primes. */
+const TYPOGRAPHIC_QUOTE = /[\p{Pi}\p{Pf}\u201A\u201E\uFF02\uFF07\u2032\u2033]/u;
+
+/**
+ * A narrowing fragment ready to AND: trimmed, its own ORDER BY dropped (a board filter carries one),
+ * and refused when its parentheses or quotes do not balance, because an unbalanced fragment could
+ * close `project in (...)` and widen the read. Quoted text is masked first, so a `)` or `order by`
+ * inside a string is never read as syntax. Empty means no narrowing.
+ */
+function narrowingJql(jql: string | undefined): string {
+  const text = (jql ?? '').trim();
+  // Jira may read typographic quotes as string delimiters, which the scan below cannot see. Refused, never guessed at.
+  if (TYPOGRAPHIC_QUOTE.test(text)) throw new Error('The Jira JQL filter has typographic quotes; use straight quotes.');
+  let masked = '';
+  let quote: string | undefined;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote !== undefined) {
+      if (c === '\\') { masked += 'xx'; i++; continue; }
+      if (c === quote) quote = undefined;
+      masked += 'x';
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; masked += 'x'; continue; }
+    // An escape outside a string could hide a parenthesis from this scan.
+    if (c === '\\') throw new Error('The Jira JQL filter has a backslash outside quotes.');
+    if (c === '(') depth++;
+    if (c === ')' && --depth < 0) break;
+    masked += c;
+  }
+  if (quote !== undefined || depth !== 0) throw new Error('The Jira JQL filter has unbalanced quotes or parentheses.');
+  const order = masked.search(/\border\s+by\b/i);
+  return (order === -1 ? text : text.slice(0, order)).trim();
 }
 
 /** The item mapper, shared by the list fetch and fetchOne. */
@@ -159,6 +199,7 @@ export class JiraFetcher implements ConnectorFetcher {
     if (!win.ok) return refusedRead({ platform: 'jira', requested: limit, scope: team ? 'team' : 'yours', detail: win.detail });
     const jql = buildJiraJql({
       ...(opts.projects ? { projects: opts.projects } : {}),
+      ...(opts.jql ? { jql: opts.jql } : {}),
       ...(opts.since ? { since: opts.since } : {}),
       ...(opts.until ? { until: opts.until } : {}),
     });
