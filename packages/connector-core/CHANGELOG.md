@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.13.0...connector-core-v0.14.0) (2026-11-09)
+
+
+### Features
+
+* **connector-core:** narrow a team read to a Jira filter or Linear projects ([#56](https://github.com/aligndottech/align-connector-sdk/issues/56)) ([c53a002](https://github.com/aligndottech/align-connector-sdk/commit/c53a0026b9d09b3f31436a7e2324139beacbbd02))
+
 ## [0.13.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.12.0...connector-core-v0.13.0) (2026-10-25)
 
 
