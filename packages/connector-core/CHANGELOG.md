@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.14.0...connector-core-v0.15.0) (2026-11-10)
+
+
+### Features
+
+* **connector-core:** narrow Notion to named pages and Confluence to named ancestors ([#58](https://github.com/aligndottech/align-connector-sdk/issues/58)) ([7fa33ee](https://github.com/aligndottech/align-connector-sdk/commit/7fa33eee21463e4fddc1a9b38c972c5bbf91bffd))
+
 ## [0.14.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.13.0...connector-core-v0.14.0) (2026-11-09)
 
 
