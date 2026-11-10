@@ -18,12 +18,12 @@ export {
 } from './github.js';
 export { GitLabFetcher, type GitLabFetcherOptions } from './gitlab.js';
 export { JiraFetcher, buildJiraJql, type JiraFetcherOptions } from './jira.js';
-export { ConfluenceFetcher } from './confluence.js';
+export { ConfluenceFetcher, type ConfluenceFetcherOptions } from './confluence.js';
 export { SlackFetcher } from './slack.js';
 export { TeamsFetcher } from './teams.js';
 export { ZoomFetcher } from './zoom.js';
 export { LinearFetcher, linearRequestsPerHour, type LinearFetcherOptions } from './linear.js';
-export { NotionFetcher } from './notion.js';
+export { NotionFetcher, type NotionFetcherOptions } from './notion.js';
 export { GitFetcher, type GitCommitSource, type GitCommitHistory, type GitCommit } from './git.js';
 export { buildCommitUrl, formatCommitAsText } from './util/git.js';
 export { FetcherAuthError, providerError, providerErrorText, type RefusedResponse } from './errors.js';

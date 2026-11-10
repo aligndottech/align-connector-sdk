@@ -10,18 +10,34 @@ import { confluencePageId, normaliseSourceKey } from '../sourceKey.js';
 
 // Confluence v2 caps page size at 250 and paginates via _links.next (a cursor).
 const CONFLUENCE_PAGE_MAX = 250;
+// The v1 content search expands page bodies, which Atlassian caps at 50 results per request.
+const CONFLUENCE_SEARCH_PAGE_MAX = 50;
 
 function stripHtml(html: string): string {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/** Confluence read options beyond the shared ones. */
+export interface ConfluenceFetcherOptions extends ConnectorFetcherOptions {
+  /** Space keys to read. Absent: every page the token can read. */
+  spaces?: string[];
+  /**
+   * Page ids (digits). Narrows the read to these pages and all their descendants, newest modified
+   * first, through one CQL search. Works with or without `spaces` (which then narrows it further).
+   * An id the token cannot read is a skip in the report; an id that is not a page id refuses the read.
+   */
+  ancestors?: string[];
+}
+
 interface ConfluencePageV2 {
   title: string;
   authorId?: string;
+  /** v1 content search only: the page's creator, which v2 reports as `authorId`. */
+  history?: { createdBy?: { accountId?: string } };
   /** The current version's date: the page as it now stands, which is also what
    *  the hosted scan records as decided_at for Confluence. The page's own
    *  top-level createdAt is the first draft. */
-  version?: { createdAt?: string };
+  version?: { createdAt?: string; when?: string };
   body?: { storage?: { value?: string } };
   _links?: { webui?: string; base?: string };
 }
@@ -118,10 +134,10 @@ async function confluenceItem(
   const bodyText = stripHtml(bodyHtml).slice(0, 2000);
   const webui = page._links?.webui ?? '';
   const pageUrl = webui.startsWith('http') ? webui : `${linkBase}${webui}`;
-  const author = await resolveUser(page.authorId);
+  const author = await resolveUser(page.authorId ?? page.history?.createdBy?.accountId);
   // The current version's date is both the "as it now stands" date and the last-modified
   // time the -modified-date sort orders by, so it is created_at (unchanged) AND updated_at.
-  const versionAt = toIsoOrUndefined(page.version?.createdAt);
+  const versionAt = toIsoOrUndefined(page.version?.createdAt ?? page.version?.when);
   const sourceKey = normaliseSourceKey('confluence', pageUrl);
   return {
     source_url: pageUrl,
@@ -138,6 +154,7 @@ async function confluenceItem(
  * Read-only personal Confluence fetcher (API v2): pages the token can read.
  * OAuth (cloudId) or basic-auth (domain+email). Author = the page author.
  * Paginates via the cursor in _links.next up to `limit`.
+ * With `ancestors`, reads only those pages and their descendants (see {@link ConfluenceFetcherOptions}).
  */
 export class ConfluenceFetcher implements ConnectorFetcher {
   /**
@@ -166,15 +183,170 @@ export class ConfluenceFetcher implements ConnectorFetcher {
     });
   }
 
-  async fetch(opts: ConnectorFetcherOptions): Promise<FetcherItem[]> {
+  async fetch(opts: ConfluenceFetcherOptions): Promise<FetcherItem[]> {
     return (await this.fetchWithReport(opts)).items;
   }
 
-  async fetchWithReport(opts: ConnectorFetcherOptions): Promise<FetchResult> {
+
+  /**
+   * The `ancestors` read: the named pages and all their descendants, by one CQL search
+   * (`ancestor in (...) OR id in (...)`, newest modified first) so the same window, cursor and
+   * limit handling as the other listings applies. v2 has `GET /pages/{id}/descendants`, but it
+   * returns ids and titles only (no body, no modified time), so using it would cost a read per
+   * page and could not sort or stop at `since`. The v1 search needs classic read scopes
+   * (read:confluence-content.all) or the granular search:confluence scope. Each id is first checked with a bodyless
+   * `GET /api/v2/pages/{id}`, because CQL answers an unreadable id with silence: an id that
+   * fails that check is a skip, and is left out of the search.
+   */
+  private async fetchUnder(
+    opts: ConfluenceFetcherOptions,
+    given: string[],
+    target: ConfluenceTarget,
+    limit: number,
+    win: { sinceMs?: number; untilMs?: number },
+  ): Promise<FetchResult> {
+    const { base, headers, humanBase } = target;
+    const ids: string[] = [];
+    const bad: string[] = [];
+    for (const raw of given) {
+      if (typeof raw === 'string' && /^[0-9]{1,19}$/.test(raw)) {
+        if (!ids.includes(raw)) ids.push(raw);
+      } else bad.push(String(raw).slice(0, 80));
+    }
+    const spaces = opts.spaces ? [...new Set(opts.spaces)] : [];
+    for (const key of spaces) if (typeof key !== 'string' || !/^[~A-Za-z0-9_-]{1,255}$/.test(key)) bad.push(String(key).slice(0, 80));
+    if (bad.length > 0) {
+      return refusedRead({
+        platform: 'confluence',
+        requested: limit,
+        scope: 'team',
+        detail: `ancestors must be page ids (digits) and spaces must be space keys; not read: ${bad.join(', ')}`,
+      });
+    }
+    const forbidden =
+      'The token lacks Confluence scopes or this site has no Confluence. ' +
+      "Re-auth won't help - check the Atlassian app's Confluence API permissions (or skip Confluence).";
+    const startedAt = Date.now();
+    const resolveUser = makeConfluenceUserResolver(base, headers);
+    const skips: FetchSkip[] = [];
+    const readable: string[] = [];
+    const unreadable: string[] = [];
+    const wanted = new Map<string, string>(); // space key -> id, when `spaces` is given
+    if (spaces.length > 0) {
+      let spaceCursor: string | undefined;
+      do {
+        const res = await fetch(
+          `${base}/api/v2/spaces?keys=${spaces.map(encodeURIComponent).join(',')}&limit=250` + (spaceCursor ? `&cursor=${encodeURIComponent(spaceCursor)}` : ''),
+          { headers, redirect: 'manual' },
+        );
+        if (!res.ok) throw await providerError('Confluence', res, { forbidden });
+        const data = (await res.json()) as { results?: Array<{ id: string; key: string }>; _links?: { next?: string } };
+        for (const sp of data.results ?? []) wanted.set(sp.key, sp.id);
+        spaceCursor = cursorFromNext(data._links?.next);
+      } while (spaceCursor);
+      const missing = spaces.filter((k) => !wanted.has(k));
+      if (missing.length > 0) skips.push({ kind: 'error', count: missing.length, detail: `spaces not found or not readable with this token: ${missing.join(', ')}` });
+    }
+    const wantedIds = new Set(wanted.values());
+    const outside: string[] = [];
+    for (const id of ids) {
+      const res = await fetch(`${base}/api/v2/pages/${id}`, { headers, redirect: 'manual' });
+      // Only "not there / not allowed" is an answer about this id; 401, 429 and 5xx are not.
+      if (!res.ok && res.status !== 403 && res.status !== 404) throw await providerError('Confluence', res, { forbidden });
+      if (!res.ok) {
+        unreadable.push(id);
+        continue;
+      }
+      if (spaces.length > 0) {
+        const page = (await res.json()) as { spaceId?: string };
+        if (!page.spaceId || !wantedIds.has(String(page.spaceId))) {
+          outside.push(id);
+          continue;
+        }
+      }
+      readable.push(id);
+    }
+    if (outside.length > 0) {
+      skips.push({ kind: 'error', count: outside.length, detail: `named pages outside the given spaces, not read: ${outside.join(', ')}` });
+    }
+    if (unreadable.length > 0) {
+      skips.push({ kind: 'error', count: unreadable.length, detail: `pages not found or not readable with this token: ${unreadable.join(', ')}` });
+    }
+
+    const items: FetcherItem[] = [];
+    const order = new DescendingWindow(win.sinceMs, win.untilMs);
+    let scanned = 0;
+    let cutByLimit = false;
+    let unfinished = 0;
+    if (readable.length > 0) {
+      const list = readable.join(', ');
+      const cql =
+        `(ancestor in (${list}) OR id in (${list}))` +
+        (spaces.length > 0 ? ` AND space in (${spaces.map((k) => `"${k}"`).join(', ')})` : '') +
+        ' AND type = page ORDER BY lastmodified DESC';
+      let cursor: string | undefined;
+      let linkBase: string | undefined;
+      let ended = false;
+      while (items.length < limit) {
+        const url =
+          `${base}/rest/api/content/search?cql=${encodeURIComponent(cql)}&limit=${CONFLUENCE_SEARCH_PAGE_MAX}` +
+          `&expand=${encodeURIComponent('body.storage,version,history')}` +
+          (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
+        const res = await fetch(url, { headers, redirect: 'manual' });
+        if (!res.ok) throw await providerError('Confluence', res, { forbidden });
+        const data = (await res.json()) as { results?: ConfluencePageV2[]; _links?: { base?: string; next?: string } };
+        linkBase = linkBase ?? data._links?.base ?? `${humanBase}/wiki`;
+        for (const page of data.results ?? []) {
+          if (items.length >= limit) {
+            cutByLimit = true;
+            break;
+          }
+          scanned += 1;
+          const place = order.place(page.version?.when ?? page.version?.createdAt);
+          if (place === 'stop') {
+            ended = true;
+            break;
+          }
+          if (place === 'drop') continue;
+          items.push(await confluenceItem(page, linkBase, resolveUser));
+        }
+        if (ended || cutByLimit) break;
+        cursor = cursorFromNext(data._links?.next);
+        if (!cursor) {
+          ended = true;
+          break;
+        }
+        if (budgetSpent(startedAt, opts.timeBudgetMs)) {
+          unfinished += 1;
+          break;
+        }
+      }
+      if (!ended && !cutByLimit && unfinished === 0 && items.length >= limit) cutByLimit = true;
+    }
+    skips.push(...order.skips('pages'));
+    if (unfinished > 0) {
+      skips.push({ kind: 'time_budget', count: unfinished, detail: `descendant search not read to the end (the ${opts.timeBudgetMs} ms time budget ran out)` });
+    }
+    return {
+      items,
+      report: buildFetchReport(items, {
+        platform: 'confluence',
+        scanned,
+        requested: limit,
+        skips,
+        scope: 'team',
+        untilMs: win.untilMs,
+        exhausted: !cutByLimit && unfinished === 0,
+      }),
+    };
+  }
+
+  async fetchWithReport(opts: ConfluenceFetcherOptions): Promise<FetchResult> {
     const { base, headers, humanBase } = confluenceTarget(opts);
     const limit = opts.limit ?? 50;
     const win = parseWindow(opts.since as string | undefined, opts.until as string | undefined);
     if (!win.ok) return refusedRead({ platform: 'confluence', requested: limit, scope: 'team', detail: win.detail });
+    if (opts.ancestors && opts.ancestors.length > 0) return this.fetchUnder(opts, opts.ancestors, { base, headers, humanBase }, limit, win);
 
     // Deduped, first occurrence kept: a key given twice is looked up and read once.
     const spaces = opts.spaces ? [...new Set(opts.spaces as string[])] : undefined;

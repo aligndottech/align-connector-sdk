@@ -68,6 +68,8 @@ export {
   type GitLabFetcherOptions,
   type JiraFetcherOptions,
   type LinearFetcherOptions,
+  type NotionFetcherOptions,
+  type ConfluenceFetcherOptions,
 } from './fetchers/index.js';
 
 // Utils
