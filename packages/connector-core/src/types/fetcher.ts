@@ -113,6 +113,17 @@ export interface ConnectorFetcherOptions {
    * is incomplete rather than looking thin.
    */
   timeBudgetMs?: number;
+  /**
+   * Slack only: emoji names (array, or one comma-separated string; colons and case are
+   * ignored) that select a message even when it has fewer than two replies. Defaults to
+   * `pushpin` and `bookmark`, the hosted connector's defaults.
+   */
+  captureEmojis?: string[] | string;
+  /**
+   * Slack only: when true a capture emoji from any user selects the message. Default
+   * false: only a reaction by the token's own user counts.
+   */
+  reactionsFromAnyone?: boolean;
   [key: string]: unknown;
 }
 

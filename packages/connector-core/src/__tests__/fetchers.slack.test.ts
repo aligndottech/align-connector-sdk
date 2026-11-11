@@ -17,6 +17,7 @@ interface Msg {
   bot_id?: string;
   subtype?: string;
   reply_count?: number;
+  reactions?: Array<{ name: string; users: string[]; count: number }>;
 }
 interface Page<T> {
   rows: T[];
@@ -577,5 +578,77 @@ describe('SlackFetcher pagination, caps and the fetch report', () => {
     const { items, report: r } = await report({ limit: 50 });
     expect(items).toHaveLength(50);
     expect(r).toMatchObject({ platform: 'slack', requested: 50, scanned: 50 });
+  });
+});
+
+describe('SlackFetcher selects a message the token user reacted to with a capture emoji', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  // auth.test in the fake answers user_id U1, so U1 is "the token's own user".
+  const pin = (name: string, users: string[]) => [{ name, users, count: users.length }];
+  const lone = (ts: string, reactions?: Msg['reactions'], replyCount?: number): Msg => ({
+    ts,
+    user: 'U1',
+    text: `decision ${ts}`,
+    ...(replyCount === undefined ? {} : { reply_count: replyCount }),
+    ...(reactions ? { reactions } : {}),
+  });
+
+  it('keeps a root with no replies when the token user reacted with pushpin', async () => {
+    serve({ history: { C1: [lone('10.1', pin('pushpin', ['U1']))] }, replies: { '10.1': [lone('10.1')] } });
+    const items = await fetchAll();
+    expect(items.map((i) => i.source_url)).toEqual(['https://slack.com/archives/C1/p101']);
+  });
+
+  it('keeps a one-reply thread when the token user reacted with bookmark', async () => {
+    serve({
+      history: { C1: [lone('11.1', pin('bookmark', ['U1']), 1)] },
+      replies: { '11.1': [lone('11.1'), { ts: '11.2', user: 'U9', text: 'ok' }] },
+    });
+    expect(await fetchAll()).toHaveLength(1);
+  });
+
+  it('still drops an unreacted one-reply thread and a root with only an unrelated reaction', async () => {
+    serve({ history: { C1: [lone('12.1', undefined, 1), lone('12.2', pin('thumbsup', ['U1']))] } });
+    expect(await fetchAll()).toEqual([]);
+  });
+
+  it('ignores a capture emoji from another user by default', async () => {
+    serve({ history: { C1: [lone('13.1', pin('pushpin', ['U9']))] }, replies: { '13.1': [lone('13.1')] } });
+    expect(await fetchAll()).toEqual([]);
+  });
+
+  it('accepts a capture emoji from anyone when reactionsFromAnyone is set', async () => {
+    serve({ history: { C1: [lone('14.1', pin('pushpin', ['U9']))] }, replies: { '14.1': [lone('14.1')] } });
+    expect(await fetchAll({ reactionsFromAnyone: true })).toHaveLength(1);
+  });
+
+  it('honours configured captureEmojis, normalising colons and case', async () => {
+    serve({ history: { C1: [lone('15.1', pin('white_check_mark', ['U1']))] }, replies: { '15.1': [lone('15.1')] } });
+    expect(await fetchAll()).toEqual([]);
+    serve({ history: { C1: [lone('15.1', pin('white_check_mark', ['U1']))] }, replies: { '15.1': [lone('15.1')] } });
+    expect(await fetchAll({ captureEmojis: ' :White_Check_Mark:, eyes' })).toHaveLength(1);
+    serve({ history: { C1: [lone('15.1', pin('pushpin', ['U1']))] }, replies: { '15.1': [lone('15.1')] } });
+    expect(await fetchAll({ captureEmojis: ['white_check_mark'] })).toEqual([]);
+  });
+
+  it('does not duplicate a reacted thread that also has 2+ replies, and a re-run returns the same keys', async () => {
+    serve({
+      history: { C1: [lone('16.1', pin('pushpin', ['U1']), 2)] },
+      replies: { '16.1': [lone('16.1'), { ts: '16.2', user: 'U9', text: 'a' }, { ts: '16.3', user: 'U9', text: 'b' }] },
+    });
+    const first = await fetchAll();
+    const second = await fetchAll();
+    expect(first).toHaveLength(1);
+    expect(second.map((i) => i.source_key)).toEqual(first.map((i) => i.source_key));
+  });
+
+  it('does not count a reacted root as a skipped short message', async () => {
+    serve({ history: { C1: [lone('17.1', pin('pushpin', ['U1'])), lone('17.2')] }, replies: { '17.1': [lone('17.1')] } });
+    const r = await new SlackFetcher().fetchWithReport({ token: 't', interChannelDelayMs: 0 });
+    expect(r.items).toHaveLength(1);
+    expect(r.report.skips.find((s) => s.kind === 'shape')?.count).toBe(1);
   });
 });
