@@ -57,11 +57,36 @@ interface SlackMessage {
   ts: string;
   text?: string;
   reply_count?: number;
+  /** Present on conversations.history messages that carry reactions; `users` lists who reacted. */
+  reactions?: Array<{ name: string; users?: string[] }>;
   /** On a thread root: the ts of its newest reply. */
   latest_reply?: string;
   user?: string;
   bot_id?: string;
   subtype?: string;
+}
+
+/** The emojis that select a message on their own: the hosted connector's defaults. */
+const DEFAULT_CAPTURE_EMOJIS = ['pushpin', 'bookmark'];
+
+function normaliseEmoji(name: string): string {
+  return name.trim().replace(/^:+|:+$/g, '').toLowerCase();
+}
+
+/** Option `captureEmojis` as an array or a comma-separated string; empty or absent means the defaults. */
+function resolveCaptureEmojis(raw: unknown): Set<string> {
+  const list = Array.isArray(raw) ? raw.map(String) : typeof raw === 'string' ? raw.split(',') : [];
+  const names = list.map(normaliseEmoji).filter(Boolean);
+  return new Set(names.length > 0 ? names : DEFAULT_CAPTURE_EMOJIS);
+}
+
+/**
+ * True when the message carries a capture emoji from `userId` (or from anyone, when
+ * `userId` is undefined). Read from conversations.history, which needs no scope beyond
+ * the history scope this fetcher already uses.
+ */
+function hasCaptureReaction(m: SlackMessage, emojis: Set<string>, userId: string | undefined): boolean {
+  return (m.reactions ?? []).some((r) => emojis.has(normaliseEmoji(r.name)) && (userId === undefined || (r.users ?? []).includes(userId)));
 }
 
 interface SlackChannel {
@@ -372,7 +397,11 @@ export class SlackFetcher implements ConnectorFetcher {
       return refusedRead({ platform: 'slack', requested: limit, scope: 'team', detail: 'hotThreads needs since: nothing was read' });
     }
 
-    await slackGet('auth.test', opts.token);
+    const auth = await slackGet('auth.test', opts.token);
+    const emojis = resolveCaptureEmojis(opts.captureEmojis);
+    // Only the token's own reaction pins by default. With no user id to compare, fall back to
+    // reading nothing rather than treating everyone's reaction as the user's.
+    const reactor = opts.reactionsFromAnyone === true ? undefined : (typeof auth.user_id === 'string' ? auth.user_id : '');
 
     // Read list pages until one shows MORE channels than the cap, so the report
     // can name the surplus it saw rather than "some". At most one page past the
@@ -431,7 +460,7 @@ export class SlackFetcher implements ConnectorFetcher {
         channelsHistoryRead += 1;
         if (hist.truncated) historyCut += 1;
         const roots = hist.rows.filter(beforeUntil);
-        const threads = roots.filter((m) => (m.reply_count ?? 0) >= 2);
+        const threads = roots.filter((m) => (m.reply_count ?? 0) >= 2 || hasCaptureReaction(m, emojis, reactor));
         shortMessages += roots.length - threads.length;
 
         for (const thread of threads) {
