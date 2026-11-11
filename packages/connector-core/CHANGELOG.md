@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.15.0...connector-core-v0.16.0) (2026-11-11)
+
+
+### Features
+
+* **connector-core:** select Slack messages the token user reacted to ([#60](https://github.com/aligndottech/align-connector-sdk/issues/60)) ([7d60e12](https://github.com/aligndottech/align-connector-sdk/commit/7d60e12b1803308d29c5f46210033691d5a89f07))
+
 ## [0.15.0](https://github.com/aligndottech/align-connector-sdk/compare/connector-core-v0.14.0...connector-core-v0.15.0) (2026-11-10)
 
 
