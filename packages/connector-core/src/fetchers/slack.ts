@@ -69,8 +69,14 @@ interface SlackMessage {
 /** The emojis that select a message on their own: the hosted connector's defaults. */
 const DEFAULT_CAPTURE_EMOJIS = ['pushpin', 'bookmark'];
 
+// Plain index scan, not a /:+$/ regex: a name of many colons would make that regex quadratic.
 function normaliseEmoji(name: string): string {
-  return name.trim().replace(/^:+|:+$/g, '').toLowerCase();
+  const t = name.trim();
+  let start = 0;
+  let end = t.length;
+  while (start < end && t[start] === ':') start += 1;
+  while (end > start && t[end - 1] === ':') end -= 1;
+  return t.slice(start, end).toLowerCase();
 }
 
 /** Option `captureEmojis` as an array or a comma-separated string; empty or absent means the defaults. */
